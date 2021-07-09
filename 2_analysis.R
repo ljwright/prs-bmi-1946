@@ -5,19 +5,23 @@ library(broom)
 library(gallimaufr)
 library(magrittr)
 library(quantreg)
+library(splines)
+library(furrr)
+library(tictoc)
 
 rm(list = ls())
 
+# KERNEL DENSITY FOR EACH SAMPLE AND SEX
+# USE RIDIT SCORE FOR FSC4 INSTEAD
+
+
+plan(multisession)
+
 # 1. Load Data ----
-df <- read_dta("C:/Users/liamj/OneDrive - University College London/prs_bmi/analysis/output/46c_bmi_ht_bmiprs.dta")  %>%
+df <- read_dta("Data/46c_bmi_ht_bmiprs.dta")  %>%
   mutate(id = row_number(), .before = 1)
 
-sexes <- list(female = "women",
-              male = "men",
-              all = c("women", "men"))
-
-
-# 2. Linear Regression Models ----
+# 2. Model Objects ----
 id_all <- df %>%
   select(id, matches("logbmi")) %>%
   drop_na() %>%
@@ -25,7 +29,7 @@ id_all <- df %>%
 
 df_bmi <- df %>%
   select(id, matches("^(logbmi|bmi)\\d+$"), -bmi09) %>%
-  rename_with(~ str_replace(.x, "bmi", "bmi_")) %>% # names()
+  rename_with(~ str_replace(.x, "bmi", "bmi_")) %>%
   pivot_longer(-id, names_to = c(".value", "age"),
                names_pattern = "(.*)_(.*)") %>%
   rename(bmi_ln = logbmi) %>%
@@ -36,9 +40,13 @@ df_bmi <- df %>%
   ungroup()
 
 df_prs <- df %>%
-  select(id, sex, matches("^zprs_")) %>%
-  mutate(sex = as_factor(sex)) %>%
-  drop_na()
+  select(id, sex, matches("^zprs_"), fsc4) %>%
+  as_factor() %>%
+  drop_na(matches("zprs"))
+
+sexes <- list(female = "women",
+              male = "men",
+              all = c("women", "men"))
 
 mod_specs <- expand_grid(age = unique(df_bmi$age),
                          sex = names(sexes),
@@ -47,12 +55,17 @@ mod_specs <- expand_grid(age = unique(df_bmi$age),
                          obs = c("cc", "obs")) %>%
   mutate(spec_id = row_number(), .before = 1)
 
-get_res <- function(spec_id){
+get_spec <- function(spec_id){
   spec <- mod_specs %>%
     filter(spec_id == !!spec_id) %>%
     as.list()
   
-  # Select Data
+  return(spec)
+}
+
+get_df <- function(spec_id){
+  spec <- get_spec(spec_id)
+  
   df_mod <- df_bmi %>%
     left_join(df_prs, by = "id") %>%
     filter(sex %in% sexes[[!!spec$sex]],
@@ -63,60 +76,25 @@ get_res <- function(spec_id){
     df_mod <- inner_join(df_mod, id_all, by = "id")
   }
   
-  # Run Model
-  mod_form <- glue("{spec$bmi_var} ~ prs")
+  return(df_mod)
+}
+
+get_form <- function(spec_id, covars = "prs"){
+  spec <- get_spec(spec_id)
+  
+  mod_form <- glue_collapse(covars, ' + ') %>%
+    paste(spec$bmi_var, "~", .)
+  
   if (spec$sex == "all") mod_form <- glue("{mod_form} + sex")
   
-  mod <- as.formula(mod_form) %>%
-    lm(df_mod)
-  
-  tidy(mod, conf.int = TRUE) %>%
-    filter(term == "prs") %>%
-    select(beta = estimate, p = p.value, lci = conf.low, uci = conf.high) %>%
-    bind_cols(glance(mod) %>% select(r2 = 1, n = 12))
+  return(mod_form)
 }
 
-gwas_dict <- c(zprs_k = "Khera et al. (2019)", 
-               zprs_r = "Richardson et al. (2020)", 
-               zprs_v = "Vogelezang et al. (2020)")
-
-df_res <- mod_specs %>%
-  mutate(map_dfr(spec_id, get_res)) %>%
-  select(-spec_id)
-
-plot_res <- function(obs, bmi_var, save_p = FALSE){
-  p <- df_res %>%
-    filter(obs == !!obs, bmi_var == !!bmi_var) %>%
-    pivot_longer(c(beta, r2), names_to = "stat", values_to = "beta") %>%
-    mutate(across(c(lci, uci), ~ ifelse(stat == "r2", NA, .x)),
-           age = factor(age) %>% fct_rev(),
-           sex = str_to_title(sex),
-           stat = ifelse(stat == "beta", "Effect Size", "R-Squared"),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict)) %>%
-    ggplot() +
-    aes(x = age, y = beta, ymin = lci, ymax = uci, color = sex) +
-    geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(gwas_clean ~ stat, scales = "free_x", switch = "y") +
-    coord_flip() +
-    geom_pointrange(position = position_dodge(0.5)) +
-    scale_color_brewer(palette = "Set1") +
-    theme_minimal() +
-    theme(strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom") +
-    labs(x = NULL, y = NULL, color = NULL)
-  
-  if (save_p){
-    glue("Images/res_{obs}_{bmi_var}.png") %>%
-      ggsave(p, height = 29.7, width = 21, units = "cm")
-  }
-  
-  return(p)
+get_ci <- function(estimates){
+  quantile(estimates, c(.5, .025, .975)) %>%
+    as_tibble_row() %>%
+    rename(beta = 1, lci = 2, uci = 3)
 }
-
-df_res %>%
-  distinct(obs, bmi_var) %$%
-  map2(obs, bmi_var, plot_res, TRUE)
 
 # 3. Scatter Plots ----
 plot_scatter <- function(prs, save_p = FALSE){
@@ -141,7 +119,7 @@ plot_scatter <- function(prs, save_p = FALSE){
     theme(legend.position = "bottom",
           strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0)) +
-    labs(x = "Polygenic Risk Score", y = "BMI", color = "Age") +
+    labs(x = "BMI", y = "Polygenic Risk Score", color = "Age") +
     guides(color = FALSE)
   
   if (save_p){
@@ -155,6 +133,7 @@ plot_scatter <- function(prs, save_p = FALSE){
 mod_specs %>%
   distinct(prs) %$%
   walk(prs, plot_scatter, TRUE)
+
 
 # 4. Kernel Density ----
 df_dens <- df_bmi %>%
@@ -178,26 +157,50 @@ ggsave("Images/density.png",
        height = 21, width = 29.7, units = "cm")
 
 
-# 5. Quantile Regression ----
-get_quant <- function(spec_id){
-  spec <- mod_specs %>%
-    filter(spec_id == !!spec_id) %>%
-    as.list()
+# 5. Linear Regression Models ----
+get_lm <- function(spec_id){
+  spec <- get_spec(spec_id)
   
-  # Select Data
-  df_mod <- df_bmi %>%
-    left_join(df_prs, by = "id") %>%
-    filter(sex %in% sexes[[!!spec$sex]],
-           age == !!spec$age) %>%
-    rename(prs = all_of(spec$prs))
+  df_mod <- get_df(spec_id) %>%
+    select(all_of(spec$bmi_var), prs, sex) %>%
+    drop_na()
   
-  if (spec$obs == "cc"){
-    df_mod <- inner_join(df_mod, id_all, by = "id")
+  mod_form <- get_form(spec_id)
+  
+  get_boot <- function(boot){
+    set.seed(boot)
+    
+    df_m <- sample_frac(df_mod, replace = TRUE)
+    
+    mod <- as.formula(mod_form) %>%
+      lm(df_m)
+    
+    c(coef(mod)["prs"],
+      r2 = broom::glance(mod)[[1]]) %>%
+      enframe(name = "term", value = "estimate")
   }
   
-  # Run Model
-  mod_form <- glue("{spec$bmi_var} ~ prs")
-  if (spec$sex == "all") mod_form <- glue("{mod_form} + sex")
+  map_dfr(1:500, get_boot, .id = "boot") %>%
+    group_by(term) %>%
+    summarise(get_ci(estimate)) %>%
+    mutate(n = nrow(df_mod))
+}
+
+tic()
+df_lm <- mod_specs %>%
+  mutate(res = future_map(spec_id, get_lm, 
+                          .progress = TRUE,
+                          .options = furrr_options(seed = NULL))) %>%
+  unnest(res)
+toc()
+
+
+# 6. Quantile Regression ----
+get_quant <- function(spec_id){
+  
+  df_mod <- get_df(spec_id)
+  
+  mod_form <- get_form(spec_id)
   
   get_rq <- function(tau){
     as.formula(mod_form) %>%
@@ -213,38 +216,182 @@ get_quant <- function(spec_id){
 
 df_quant <- mod_specs %>%
   mutate(res = map(spec_id, get_quant)) %>%
-  unnest(res) %>%
-  select(-spec_id)
+  unnest(res)
 
-plot_quant <- function(obs, bmi_var, save_p = FALSE){
-  p <- df_quant %>%
-    filter(obs == !!obs, bmi_var == !!bmi_var) %>%
-    mutate(age = factor(age) %>% ordered(),
-           sex = str_to_title(sex),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict))%>%
-    ggplot() +
-    aes(x = tau, y = beta, ymin = lci, ymax = uci,
-        color = age, fill = age) +
-    geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(gwas_clean ~ sex, scales = "free", switch = "y") +
-    geom_ribbon(color = NA, alpha = 0.1) +
-    geom_line() +
-    scale_x_continuous(breaks = 1:9/10, labels = glue("{1:9*10}th")) +
-    theme_minimal() +
-    theme(strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom",
-          axis.text.x = element_text(angle = 45, hjust = 1)) +
-    labs(x = "Percentile", y = NULL, color = "Age", fill = "Age")
+
+# 7. SEP Additive ----
+get_sep <- function(spec_id){
   
-  if (save_p){
-    glue("Images/quant_{obs}_{bmi_var}.png") %>%
-      ggsave(p, height = 29.7, width = 21, units = "cm")
+  spec <- get_spec(spec_id)
+  
+  df_mod <- get_df(spec_id) %>% 
+    select(all_of(spec$bmi_var), prs, fsc4, sex) %>%
+    drop_na()
+  
+  mod_form <- get_form(spec_id)
+  
+  get_boot <- function(boot){
+    set.seed(boot)
+    
+    df_m <- sample_frac(df_mod, replace = TRUE)
+    
+    mod <- as.formula(mod_form) %>%
+      lm(df_m)
+    
+    run_sep <- function(covars){
+      mod <- get_form(spec_id, covars) %>%
+        as.formula() %>%
+        lm(df_m)
+      
+      coefs <- coef(mod)
+      
+      c(coefs[str_detect(names(coefs), "^fsc4")],
+        r2 = broom::glance(mod)[[1]]) %>%
+        enframe(name = "term", value = "estimate")
+    }
+    
+    r2_prs <- get_form(spec_id, "prs") %>%
+      as.formula() %>%
+      lm(df_m) %>%
+      broom::glance(mod) %>%
+      pull(1)
+    
+    bind_rows(bivar = run_sep("fsc4"),
+              adjust = run_sep(c("prs", "fsc4")),
+              .id = "mod") %>%
+      uncount(ifelse(term == "r2", 2, 1), .id = "id") %>%
+      mutate(term = ifelse(id == 2, "r2_diff", term),
+             estimate = ifelse(id == 2, estimate - r2_prs, estimate))
   }
   
-  return(p)
+
+  map_dfr(1:500, get_boot, .id = "boot") %>%
+    group_by(mod, term) %>%
+    summarise(get_ci(estimate),
+              .groups = "drop") %>%
+    mutate(n = nrow(df_mod))
 }
 
-df_quant %>%
-  distinct(obs, bmi_var) %$%
-  map2(obs, bmi_var, plot_quant, TRUE)
+tic()
+df_sep <- mod_specs %>%
+  mutate(res = future_map(spec_id, get_sep, 
+                          .progress = TRUE,
+                          .options = furrr_options(seed = NULL))) %>%
+  unnest(res)
+toc()
+
+
+# 8. SEP Multiplicative
+get_mult <- function(spec_id){
+  
+  spec <- get_spec(spec_id)
+  
+  df_mod <- get_df(spec_id) %>% 
+    select(all_of(spec$bmi_var), prs, fsc4, sex) %>%
+    drop_na()
+  
+  mod <- get_form(spec_id, "prs*fsc4") %>%
+      as.formula() %>%
+      lm(df_mod)
+    
+  tidy(mod, conf.int = TRUE) %>%
+      filter(str_detect(term, "^prs\\:fsc4")) %>%
+      select(term, beta = estimate, p = p.value, lci = conf.low, uci = conf.high) %>%
+      bind_cols(glance(mod) %>% select(r2 = 1, n = 12))
+}
+
+df_mult <- mod_specs %>%
+  mutate(res = map(spec_id, get_mult)) %>%
+  unnest(res)
+
+
+# 9. Splines ----
+get_splines <- function(spec_id){
+  df_mod <- get_df(spec_id) 
+  mod_form <- get_form(spec_id)
+  
+  df_s <- df_mod %>%
+    distinct(prs) %>%
+    drop_na() %>%
+    arrange(prs) %>%
+    mutate(ns(prs, 2) %>%
+             as_tibble() %>%
+             rename_with(~ glue("ns_{.x}")))
+  
+  df_mod <- left_join(df_mod, df_s, by = "prs") %>%
+    select(bmi, sex, matches("^ns_")) %>%
+    drop_na()
+  
+  df_s <- df_s %>%
+    filter(row_number() %% 10 == 1) %>%
+    pivot_longer(-prs, names_to = "term")
+  
+  mod_form <- get_form(spec_id, str_subset(names(df_mod), "^ns_"))
+  
+  get_boot <- function(boot){
+    set.seed(boot)
+    df_m <- sample_frac(df_mod, replace = TRUE)
+    
+    as.formula(mod_form) %>%
+      lm(df_m) %>%
+      coef()
+  }
+  boots <- map(1:500, get_boot)
+  
+  list(boots = boots, splines = df_s)
+}
+
+tic()
+df_splines <- mod_specs %>%
+  filter(bmi_var == "bmi") %>%
+  mutate(res = future_map(spec_id, get_splines, 
+                          .progress = TRUE,
+                          .options = furrr_options(seed = NULL)))
+toc()
+
+# Observed Data
+get_splines_obs <- function(spec_id){
+  df_mod <- get_df(spec_id) 
+  mod_form <- get_form(spec_id)
+  
+  df_s <- df_mod %>%
+    distinct(prs) %>%
+    drop_na() %>%
+    arrange(prs) %>%
+    mutate(ns(prs, 2) %>%
+             as_tibble() %>%
+             rename_with(~ glue("ns_{.x}")))
+  
+  df_mod <- left_join(df_mod, df_s, by = "prs") %>%
+    select(bmi, sex, matches("^ns_")) %>%
+    drop_na()
+  
+  df_s <- df_s %>%
+    filter(row_number() %% 10 == 1) %>%
+    pivot_longer(-prs, names_to = "term")
+  
+  mod_form <- get_form(spec_id, str_subset(names(df_mod), "^ns_"))
+  
+  coefs <- as.formula(mod_form) %>%
+      lm(df_mod) %>%
+      coef()
+    
+  df_s %>%
+      group_by(prs) %>%
+      summarise(beta = sum(value*coefs[term]),
+                .groups = "drop") %>%
+    rename(prs_val = prs)
+}
+
+df_splines_ob <- mod_specs %>%
+  filter(bmi_var == "bmi") %>%
+  mutate(res = map(spec_id, get_splines_obs)) %>%
+  unnest(res)
+
+
+# 10. Save Objects ----
+save(df_lm, df_quant,
+     df_sep, df_mult,
+     df_splines, df_splines_ob,
+     mod_specs, get_ci,
+     file = "Data/regression_results.Rdata")
