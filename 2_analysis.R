@@ -8,17 +8,16 @@ library(quantreg)
 library(splines)
 library(furrr)
 library(tictoc)
+library(margins)
 
 rm(list = ls())
 
 # KERNEL DENSITY FOR EACH SAMPLE AND SEX
-# USE RIDIT SCORE FOR FSC4 INSTEAD
-
-
+# SPLINES MARGINS NEED CENTERING
 plan(multisession)
 
 # 1. Load Data ----
-df <- read_dta("Data/46c_bmi_ht_bmiprs.dta")  %>%
+df <- read_dta("Data/46c_bmi_ht_bmiprs.dta") %>%
   mutate(id = row_number(), .before = 1)
 
 # 2. Model Objects ----
@@ -40,7 +39,7 @@ df_bmi <- df %>%
   ungroup()
 
 df_prs <- df %>%
-  select(id, sex, matches("^zprs_"), fsc4) %>%
+  select(id, sex, matches("^zprs_"), fsc4_ridit) %>%
   as_factor() %>%
   drop_na(matches("zprs"))
 
@@ -225,7 +224,7 @@ get_sep <- function(spec_id){
   spec <- get_spec(spec_id)
   
   df_mod <- get_df(spec_id) %>% 
-    select(all_of(spec$bmi_var), prs, fsc4, sex) %>%
+    select(all_of(spec$bmi_var), prs, fsc4_ridit, sex) %>%
     drop_na()
   
   mod_form <- get_form(spec_id)
@@ -245,7 +244,7 @@ get_sep <- function(spec_id){
       
       coefs <- coef(mod)
       
-      c(coefs[str_detect(names(coefs), "^fsc4")],
+      c(coefs["fsc4_ridit"],
         r2 = broom::glance(mod)[[1]]) %>%
         enframe(name = "term", value = "estimate")
     }
@@ -256,8 +255,8 @@ get_sep <- function(spec_id){
       broom::glance(mod) %>%
       pull(1)
     
-    bind_rows(bivar = run_sep("fsc4"),
-              adjust = run_sep(c("prs", "fsc4")),
+    bind_rows(bivar = run_sep("fsc4_ridit"),
+              adjust = run_sep(c("prs", "fsc4_ridit")),
               .id = "mod") %>%
       uncount(ifelse(term == "r2", 2, 1), .id = "id") %>%
       mutate(term = ifelse(id == 2, "r2_diff", term),
@@ -270,6 +269,7 @@ get_sep <- function(spec_id){
     summarise(get_ci(estimate),
               .groups = "drop") %>%
     mutate(n = nrow(df_mod))
+  
 }
 
 tic()
@@ -282,33 +282,48 @@ toc()
 
 
 # 8. SEP Multiplicative
+fsc4_vals <- count(df_mod, fsc4_ridit) %>%
+  drop_na() %>%
+  pull(1) %>%
+  c(0, ., 1)
+
 get_mult <- function(spec_id){
   
   spec <- get_spec(spec_id)
   
   df_mod <- get_df(spec_id) %>% 
-    select(all_of(spec$bmi_var), prs, fsc4, sex) %>%
+    select(all_of(spec$bmi_var), prs, fsc4_ridit, sex) %>%
     drop_na()
   
-  mod <- get_form(spec_id, "prs*fsc4") %>%
-      as.formula() %>%
-      lm(df_mod)
-    
-  tidy(mod, conf.int = TRUE) %>%
-      filter(str_detect(term, "^prs\\:fsc4")) %>%
-      select(term, beta = estimate, p = p.value, lci = conf.low, uci = conf.high) %>%
-      bind_cols(glance(mod) %>% select(r2 = 1, n = 12))
+  mod <- get_form(spec_id, "prs*fsc4_ridit") %>%
+    as.formula() %>%
+    lm(df_mod)
+  
+  mrg <- margins(mod, at = list(fsc4_ridit = fsc4_vals), variables = "prs") %>%
+    tidy(conf.int = TRUE) %>%
+    select(fsc4_ridit = 3, beta = 4, p = 7, lci = 8, uci = 9) %>%
+    list()
+  
+  res <- tidy(mod, conf.int = TRUE) %>%
+    filter(term == "prs:fsc4_ridit") %>%
+    select(beta = 1, p = 5, lci = 6, uci = 7) %>%
+    bind_cols(glance(mod) %>% select(r2 = 1, n = 12)) %>%
+    list()
+  
+  tibble(margins = mrg, mod = res)
+  
 }
 
 df_mult <- mod_specs %>%
   mutate(res = map(spec_id, get_mult)) %>%
   unnest(res)
 
+rm(fsc4_vals)
+
 
 # 9. Splines ----
 get_splines <- function(spec_id){
-  df_mod <- get_df(spec_id) 
-  mod_form <- get_form(spec_id)
+  df_mod <- get_df(spec_id)
   
   df_s <- df_mod %>%
     distinct(prs) %>%
@@ -386,6 +401,27 @@ get_splines_obs <- function(spec_id){
 df_splines_ob <- mod_specs %>%
   filter(bmi_var == "bmi") %>%
   mutate(res = map(spec_id, get_splines_obs)) %>%
+  unnest(res)
+
+# Margins
+prs_val <- seq(from = -3, to = 3, length.out = 100)
+
+get_splines_mrg <- function(spec_id){
+  df_mod <- get_df(spec_id) 
+  
+  mod_form <- get_form(spec_id, "splines::ns(prs, 2)")
+  
+  mod <- as.formula(mod_form) %>%
+    lm(df_mod)
+  
+  margins(mod, at = list(prs = prs_val), variables = "prs") %>%
+    tidy(conf.int = TRUE) %>%
+    select(prs = 3, beta = 4, p = 7, lci = 8, uci = 9)
+}
+
+df_splines_mrg <- mod_specs %>%
+  filter(bmi_var == "bmi") %>%
+  mutate(res = map(spec_id, get_splines_mrg)) %>%
   unnest(res)
 
 
