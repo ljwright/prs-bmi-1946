@@ -2,6 +2,7 @@ library(tidyverse)
 library(glue)
 library(magrittr)
 library(paletteer)
+library(patchwork)
 
 rm(list = ls())
 
@@ -11,6 +12,9 @@ load("Data/regression_results.Rdata")
 gwas_dict <- c(zprs_k = "Khera et al. (2019)", 
                zprs_r = "Richardson et al. (2020)", 
                zprs_v = "Vogelezang et al. (2020)")
+
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
+                "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 
 # 2. Linear Regressions ----
 plot_lm <- function(obs, bmi_var, save_p = FALSE){
@@ -82,7 +86,6 @@ df_quant %>%
 
 # 4. SEP Additive ----
 mod_dict <- c(bivar = "Bivariate", adjust = "+ Polygenic Risk Score")
-class_dict <- c("1" = "I", "2" = "II", "3" = "III", "4" = "IV", "v unskilled" = "V")
 
 plot_sep <- function(obs, sex, bmi_var, save_p = FALSE){
   df_res <- df_sep %>%
@@ -92,60 +95,50 @@ plot_sep <- function(obs, sex, bmi_var, save_p = FALSE){
            mod = ifelse(term == "r2_diff", NA, mod),
            mod_clean = factor(mod_dict[mod], mod_dict),
            sex = str_to_title(sex),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict))
-  
+           gwas_clean = factor(gwas_dict[prs], gwas_dict),
+           term_clean = case_when(term == "r2" ~ "R-Squared",
+                                  term == "r2_diff" ~ "Addtional Variance Explained by SEP",
+                                  TRUE ~ "Marginal Effect") %>%
+             fct_rev())
   
   p1 <- df_res %>%
     filter(str_detect(term, "^fsc4")) %>%
-    mutate(term = str_replace(term, "fsc4", ""),
-           class_clean = factor(class_dict[term], class_dict, ordered = TRUE)) %>%
     ggplot() +
-    aes(x = age, y = beta, ymin = lci, ymax = uci,
-        color = class_clean, fill = class_clean, group = class_clean) +
+    aes(x = age, y = beta, ymin = lci, ymax = uci, 
+        color = mod_clean, fill = mod_clean, group = mod_clean) +
     geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(gwas_clean ~ mod_clean, scales = "free_x", switch = "y") +
+    facet_grid(gwas_clean ~ term_clean, scales = "free", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
+    scale_color_manual(values = cbbPalette[6:7]) +
+    scale_fill_manual(values = cbbPalette[6:7]) +
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom") +
-    labs(x = "Age", y = NULL, color = "Social Class",
-         fill = "Social Class")
-  
+          legend.position = "bottom",
+          panel.spacing = unit(1, "lines")) +
+    labs(x = "Age", y = NULL, color = "Model", fill = "Model")
   
   p2 <- df_res %>%
     filter(term == "r2") %>%
-    mutate(term_clean = ifelse(term == "r2", "R-Squared", "Addtional Variance Explained") %>%
-             fct_rev()) %>%
-    ggplot() +
-    aes(x = age, y = beta, ymin = lci, ymax = uci, color = mod_clean) +
-    facet_grid(gwas_clean ~ term_clean, scales = "free_x") +
-    geom_pointrange(position = position_dodge(0.5)) +
-    scale_color_brewer(palette = "Set1") +
-    theme_minimal() +
-    theme(strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom",
-          strip.text.y  = element_blank()) +
-    labs(x = "Age", y = NULL, color = "Model")
-  
-  p3 <- df_res %>%
-    filter(term == "r2_diff") %>%
-    mutate(term_clean = ifelse(term == "r2", "R-Squared", "Addtional Variance Explained") %>%
-             fct_rev()) %>%
     ggplot() +
     aes(x = age, y = beta, ymin = lci, ymax = uci) +
-    facet_grid(gwas_clean ~ term_clean, scales = "free_x") +
-    geom_pointrange(color = paletteer_d("RColorBrewer::Set1")[3]) +
+    facet_grid(gwas_clean ~ term_clean, scales = "free") +
+    geom_pointrange(aes(color = mod_clean), position = position_dodge(0.5)) +
+    geom_pointrange(data = filter(df_res, term == "r2_diff"),
+                    color = cbbPalette[8]) +
+    scale_color_manual(values = cbbPalette[6:7]) +
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom",
-          strip.text.y  = element_blank()) +
-    labs(x = "Age", y = NULL, color = "Model")
+          strip.text.y  = element_blank(),
+          panel.spacing = unit(1, "lines")) +
+    guides(color = FALSE) +
+    labs(x = "Age", y = NULL)
   
-  p <- p1 + p2 + p3 +  plot_layout(widths = c(2, 1, 1))
+  p <- p1 + p2  + plot_layout(widths = c(1, 2)) +
+    plot_layout(guides = "collect") & 
+    theme(legend.position = 'bottom')
   
   if (save_p){
     glue("Images/sep_{obs}_{bmi_var}_{sex}.png") %>%
@@ -161,25 +154,35 @@ df_quant %>%
 
 
 # 5. SEP Multiplicative ----
-plot_quant <- function(obs, bmi_var, save_p = FALSE){
+plot_mult <- function(obs, bmi_var, save_p = FALSE){
   p <- df_mult %>%
+    pivot_longer(c(margins, mod)) %>%
+    unnest(value) %>%
+    mutate(ridit = case_when(fsc4_ridit == 0 ~ "Lowest SEP",
+                             fsc4_ridit == 1 ~ "Highest SEP",
+                             is.na(fsc4_ridit) ~ "Interaction Term",
+                             TRUE ~ NA_character_) %>%
+             factor(c("Lowest SEP", "Highest SEP", "Interaction Term"))) %>%
+    filter(!is.na(ridit)) %>%
     filter(obs == !!obs, bmi_var == !!bmi_var) %>%
-    mutate(age = factor(age),
-           sex = str_to_title(sex),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict),
-           term = str_replace(term, "prs\\:fsc4", ""),
-           class_clean = factor(class_dict[term], class_dict, ordered = TRUE)) %>%
+    mutate(sex = str_to_title(sex),
+           # age = factor(age),
+           gwas_clean = factor(gwas_dict[prs], gwas_dict)) %>%
     ggplot() +
     aes(x = age, y = beta, ymin = lci, ymax = uci,
-        color = class_clean, fill = class_clean, group = class_clean) +
+        color = ridit, fill = ridit, group = ridit) +
     geom_hline(yintercept = 0, linetype = "dashed") +
     facet_grid(gwas_clean ~ sex, scales = "free_x", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
+    scale_x_continuous(breaks = unique(mod_specs$age)) +
+    scale_color_brewer(palette = "Dark2") +
+    scale_fill_brewer(palette = "Dark2") +
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom") +
+          legend.position = "bottom",
+          panel.grid.minor.x = element_blank()) +
     labs(x = "Age", y = NULL, color = "Social Class",
          fill = "Social Class")
   

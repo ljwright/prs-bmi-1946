@@ -282,7 +282,7 @@ toc()
 
 
 # 8. SEP Multiplicative
-fsc4_vals <- count(df_mod, fsc4_ridit) %>%
+fsc4_vals <- count(df_prs, fsc4_ridit) %>%
   drop_na() %>%
   pull(1) %>%
   c(0, ., 1)
@@ -306,7 +306,7 @@ get_mult <- function(spec_id){
   
   res <- tidy(mod, conf.int = TRUE) %>%
     filter(term == "prs:fsc4_ridit") %>%
-    select(beta = 1, p = 5, lci = 6, uci = 7) %>%
+    select(beta = 2, p = 5, lci = 6, uci = 7) %>%
     bind_cols(glance(mod) %>% select(r2 = 1, n = 12)) %>%
     list()
   
@@ -401,27 +401,6 @@ get_splines_obs <- function(spec_id){
 df_splines_ob <- mod_specs %>%
   filter(bmi_var == "bmi") %>%
   mutate(res = map(spec_id, get_splines_obs)) %>%
-  unnest(res)
-
-# Margins
-prs_val <- seq(from = -3, to = 3, length.out = 100)
-
-get_splines_mrg <- function(spec_id){
-  df_mod <- get_df(spec_id) 
-  
-  mod_form <- get_form(spec_id, "splines::ns(prs, 2)")
-  
-  mod <- as.formula(mod_form) %>%
-    lm(df_mod)
-  
-  margins(mod, at = list(prs = prs_val), variables = "prs") %>%
-    tidy(conf.int = TRUE) %>%
-    select(prs = 3, beta = 4, p = 7, lci = 8, uci = 9)
-}
-
-df_splines_mrg <- mod_specs %>%
-  filter(bmi_var == "bmi") %>%
-  mutate(res = map(spec_id, get_splines_mrg)) %>%
   unnest(res)
 
 
