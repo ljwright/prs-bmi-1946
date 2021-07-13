@@ -34,7 +34,8 @@ plot_lm <- function(obs, bmi_var, save_p = FALSE){
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom") +
+          legend.position = "bottom",
+          panel.spacing = unit(1, "lines")) +
     labs(x = NULL, y = NULL, color = NULL)
   
   if (save_p){
@@ -56,25 +57,29 @@ plot_quant <- function(obs, bmi_var, save_p = FALSE){
     filter(obs == !!obs, bmi_var == !!bmi_var) %>%
     mutate(age = factor(age) %>% ordered(),
            sex = str_to_title(sex),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict))%>%
+           gwas_clean = factor(gwas_dict[prs], gwas_dict),
+           tau = glue("{tau*100}th") %>%
+             fct_reorder(tau)) %>%
     ggplot() +
     aes(x = tau, y = beta, ymin = lci, ymax = uci,
-        color = age, fill = age) +
+        color = age, fill = age, group = age) +
     geom_hline(yintercept = 0, linetype = "dashed") +
     facet_grid(gwas_clean ~ sex, scales = "free", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.1) +
     geom_line() +
-    scale_x_continuous(breaks = 1:9/10, labels = glue("{1:9*10}th")) +
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
           legend.position = "bottom",
-          axis.text.x = element_text(angle = 45, hjust = 1)) +
-    labs(x = "Percentile", y = NULL, color = "Age", fill = "Age")
+          axis.text.x = element_text(angle = 45, hjust = 1),
+          panel.spacing = unit(1, "lines")) +
+    labs(x = "Percentile", y = NULL, color = "Age", fill = "Age") +
+    guides(color = guide_legend(nrow = 2),
+           fill = guide_legend(nrow = 2))
   
   if (save_p){
     glue("Images/quant_{obs}_{bmi_var}.png") %>%
-      ggsave(p, height = 29.7, width = 21, units = "cm")
+      ggsave(p, height = 21, width = 29.7, units = "cm")
   }
   
   return(p)
@@ -123,7 +128,7 @@ plot_sep <- function(obs, sex, bmi_var, save_p = FALSE){
     filter(term == "r2") %>%
     ggplot() +
     aes(x = age, y = beta, ymin = lci, ymax = uci) +
-    facet_grid(gwas_clean ~ term_clean, scales = "free") +
+    facet_grid(gwas_clean ~ term_clean) +
     geom_pointrange(aes(color = mod_clean), position = position_dodge(0.5)) +
     geom_pointrange(data = filter(df_res, term == "r2_diff"),
                     color = cbbPalette[8]) +
@@ -134,7 +139,7 @@ plot_sep <- function(obs, sex, bmi_var, save_p = FALSE){
           strip.text.y  = element_blank(),
           panel.spacing = unit(1, "lines")) +
     guides(color = FALSE) +
-    labs(x = "Age", y = NULL)
+    labs(x = "Age", y = NULL) 
   
   p <- p1 + p2  + plot_layout(widths = c(1, 2)) +
     plot_layout(guides = "collect") & 
@@ -148,7 +153,7 @@ plot_sep <- function(obs, sex, bmi_var, save_p = FALSE){
   return(p)
 }
 
-df_quant %>%
+df_sep %>%
   distinct(obs, sex, bmi_var) %$%
   pmap(list(obs, sex, bmi_var), plot_sep, TRUE)
 
@@ -162,7 +167,8 @@ plot_mult <- function(obs, bmi_var, save_p = FALSE){
                              fsc4_ridit == 1 ~ "Highest SEP",
                              is.na(fsc4_ridit) ~ "Interaction Term",
                              TRUE ~ NA_character_) %>%
-             factor(c("Lowest SEP", "Highest SEP", "Interaction Term"))) %>%
+             factor(c("Lowest SEP", "Highest SEP", "Interaction Term")),
+           age = factor(age)) %>%
     filter(!is.na(ridit)) %>%
     filter(obs == !!obs, bmi_var == !!bmi_var) %>%
     mutate(sex = str_to_title(sex),
@@ -175,14 +181,13 @@ plot_mult <- function(obs, bmi_var, save_p = FALSE){
     facet_grid(gwas_clean ~ sex, scales = "free_x", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
-    scale_x_continuous(breaks = unique(mod_specs$age)) +
     scale_color_brewer(palette = "Dark2") +
     scale_fill_brewer(palette = "Dark2") +
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
           legend.position = "bottom",
-          panel.grid.minor.x = element_blank()) +
+          panel.spacing = unit(1, "lines")) +
     labs(x = "Age", y = NULL, color = "Social Class",
          fill = "Social Class")
   
@@ -196,7 +201,7 @@ plot_mult <- function(obs, bmi_var, save_p = FALSE){
 
 df_mult %>%
   distinct(obs, bmi_var) %$%
-  map2(obs, bmi_var, plot_quant, TRUE)
+  map2(obs, bmi_var, plot_mult, TRUE)
 
 
 # 6. Splines ----
@@ -235,7 +240,7 @@ plot_splines <- function(obs, prs, save_p = FALSE){
     facet_wrap(~ age, scales = "free_y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
-    theme_minimal() +
+    theme_bw() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
           legend.position = "bottom") +
@@ -274,7 +279,7 @@ plot_splines_2 <- function(obs, prs, save_p = FALSE){
     geom_line(alpha = 0.05) +
     geom_line(data = clean_res(rename(df_splines_ob, estimate = beta), obs, prs),
               size = 1.25) +
-    theme_minimal() +
+    theme_bw() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
           legend.position = "bottom") +

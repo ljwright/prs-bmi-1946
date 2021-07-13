@@ -11,49 +11,12 @@ library(tictoc)
 library(margins)
 
 rm(list = ls())
-
-# KERNEL DENSITY FOR EACH SAMPLE AND SEX
-# SPLINES MARGINS NEED CENTERING
 plan(multisession)
 
 # 1. Load Data ----
-df <- read_dta("Data/46c_bmi_ht_bmiprs.dta") %>%
-  mutate(id = row_number(), .before = 1)
+load("Data/model_objects.Rdata")
 
-# 2. Model Objects ----
-id_all <- df %>%
-  select(id, matches("logbmi")) %>%
-  drop_na() %>%
-  select(id)
-
-df_bmi <- df %>%
-  select(id, matches("^(logbmi|bmi)\\d+$"), -bmi09) %>%
-  rename_with(~ str_replace(.x, "bmi", "bmi_")) %>%
-  pivot_longer(-id, names_to = c(".value", "age"),
-               names_pattern = "(.*)_(.*)") %>%
-  rename(bmi_ln = logbmi) %>%
-  mutate(bmi = as.numeric(bmi),
-         age = as.numeric(age)) %>%
-  group_by(age) %>%
-  mutate(bmi_std = wtd_scale(bmi)) %>%
-  ungroup()
-
-df_prs <- df %>%
-  select(id, sex, matches("^zprs_"), fsc4_ridit) %>%
-  as_factor() %>%
-  drop_na(matches("zprs"))
-
-sexes <- list(female = "women",
-              male = "men",
-              all = c("women", "men"))
-
-mod_specs <- expand_grid(age = unique(df_bmi$age),
-                         sex = names(sexes),
-                         prs = str_subset(names(df_prs), "zprs"),
-                         bmi_var = str_subset(names(df_bmi), "bmi"),
-                         obs = c("cc", "obs")) %>%
-  mutate(spec_id = row_number(), .before = 1)
-
+# 2. Model Functions ----
 get_spec <- function(spec_id){
   spec <- mod_specs %>%
     filter(spec_id == !!spec_id) %>%
@@ -95,68 +58,8 @@ get_ci <- function(estimates){
     rename(beta = 1, lci = 2, uci = 3)
 }
 
-# 3. Scatter Plots ----
-plot_scatter <- function(prs, save_p = FALSE){
-  df_scat <- df_bmi %>%
-    left_join(df_prs, by = "id") %>%
-    select(id, age, bmi, matches("zprs")) %>%
-    pivot_longer(matches("zprs"), names_to = "prs", values_to = "prs_value") %>%
-    drop_na() %>%
-    inner_join(id_all, by = "id") %>%
-    mutate(age = factor(age) %>% ordered(),
-           bmi = as.numeric(bmi)) %>%
-    filter(prs == !!prs)
-  
-  p <- ggplot(df_scat) +
-    aes(x = bmi, y = prs_value) +
-    facet_wrap(~ age, ncol = 4) +
-    coord_flip() +
-    geom_jitter(data = select(df_scat, -age), color = "grey70", alpha = 0.2) +
-    geom_jitter(aes(color = age), alpha = 0.2) +
-    guides(color = guide_legend(override.aes = list(alpha = 1))) +
-    theme_minimal() +
-    theme(legend.position = "bottom",
-          strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0)) +
-    labs(x = "BMI", y = "Polygenic Risk Score", color = "Age") +
-    guides(color = FALSE)
-  
-  if (save_p){
-    glue("Images/scatter_{prs}.png") %>%
-      ggsave(p, height = 21, width = 29.7, units = "cm")
-  }
-  
-  return(p)
-}
 
-mod_specs %>%
-  distinct(prs) %$%
-  walk(prs, plot_scatter, TRUE)
-
-
-# 4. Kernel Density ----
-df_dens <- df_bmi %>%
-  select(id, age, bmi) %>%
-  drop_na() %>%
-  inner_join(id_all, by = "id") %>%
-  mutate(age = factor(age) %>% ordered(),
-         age_f = age,
-         bmi = as.numeric(bmi))
-
-ggplot(df_dens) +
-  aes(x = bmi) +
-  facet_wrap(~ age, ncol = 4) +
-  geom_density(data = select(df_dens, -age), aes(group = age_f),
-               color = "grey70", fill = "grey70", alpha = 0.4) +
-  geom_density(aes(color = age, fill = age), alpha = 0.7) +
-  guides(color = FALSE, fill = FALSE) +
-  theme_minimal() +
-  labs(x = "BMI", y = "Density")
-ggsave("Images/density.png",
-       height = 21, width = 29.7, units = "cm")
-
-
-# 5. Linear Regression Models ----
+# 3. Linear Regression Models ----
 get_lm <- function(spec_id){
   spec <- get_spec(spec_id)
   
@@ -174,8 +77,16 @@ get_lm <- function(spec_id){
     mod <- as.formula(mod_form) %>%
       lm(df_m)
     
-    c(coef(mod)["prs"],
-      r2 = broom::glance(mod)[[1]]) %>%
+    r2 <- broom::glance(mod)[[1]]
+    if (spec$sex == "all"){
+      r2_base <- get_form(spec_id, "1") %>%
+        lm(df_m) %>%
+        broom::glance() %>%
+        pull(1)
+      r2 <- r2 - r2_base
+    }
+    
+    c(coef(mod)["prs"], r2 = r2) %>%
       enframe(name = "term", value = "estimate")
   }
   
@@ -194,7 +105,7 @@ df_lm <- mod_specs %>%
 toc()
 
 
-# 6. Quantile Regression ----
+# 4. Quantile Regression ----
 get_quant <- function(spec_id){
   
   df_mod <- get_df(spec_id)
@@ -218,7 +129,7 @@ df_quant <- mod_specs %>%
   unnest(res)
 
 
-# 7. SEP Additive ----
+# 5. SEP Additive ----
 get_sep <- function(spec_id){
   
   spec <- get_spec(spec_id)
@@ -263,7 +174,7 @@ get_sep <- function(spec_id){
              estimate = ifelse(id == 2, estimate - r2_prs, estimate))
   }
   
-
+  
   map_dfr(1:500, get_boot, .id = "boot") %>%
     group_by(mod, term) %>%
     summarise(get_ci(estimate),
@@ -281,7 +192,7 @@ df_sep <- mod_specs %>%
 toc()
 
 
-# 8. SEP Multiplicative
+# 6. SEP Multiplicative
 fsc4_vals <- count(df_prs, fsc4_ridit) %>%
   drop_na() %>%
   pull(1) %>%
@@ -321,7 +232,7 @@ df_mult <- mod_specs %>%
 rm(fsc4_vals)
 
 
-# 9. Splines ----
+# 7. Splines ----
 get_splines <- function(spec_id){
   df_mod <- get_df(spec_id)
   
@@ -388,13 +299,13 @@ get_splines_obs <- function(spec_id){
   mod_form <- get_form(spec_id, str_subset(names(df_mod), "^ns_"))
   
   coefs <- as.formula(mod_form) %>%
-      lm(df_mod) %>%
-      coef()
-    
+    lm(df_mod) %>%
+    coef()
+  
   df_s %>%
-      group_by(prs) %>%
-      summarise(beta = sum(value*coefs[term]),
-                .groups = "drop") %>%
+    group_by(prs) %>%
+    summarise(beta = sum(value*coefs[term]),
+              .groups = "drop") %>%
     rename(prs_val = prs)
 }
 
@@ -404,7 +315,7 @@ df_splines_ob <- mod_specs %>%
   unnest(res)
 
 
-# 10. Save Objects ----
+# 8. Save Objects ----
 save(df_lm, df_quant,
      df_sep, df_mult,
      df_splines, df_splines_ob,
