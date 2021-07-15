@@ -11,7 +11,8 @@ library(tictoc)
 library(margins)
 
 rm(list = ls())
-plan(multisession)
+
+plan(multisession, workers = 4)
 
 # 1. Load Data ----
 load("Data/df_long.Rdata")
@@ -157,6 +158,7 @@ get_attrit <- function(age_from, spec_id){
     select(beta = 2, p = 5, lci = 6, uci = 7)
 }
 
+tic()
 res_attrit <- expand_grid(mod_specs, age_from = c(0, ages)) %>%
   filter(age >= age_from) %>%
   mutate(future_map2_dfr(age_from, spec_id, get_attrit, 
@@ -164,6 +166,7 @@ res_attrit <- expand_grid(mod_specs, age_from = c(0, ages)) %>%
                          .options = furrr_options(seed = NULL)),
          age_from = factor(age_from) %>%
            fct_recode("Observed" = "0", "Complete Cases" = "2"))
+toc()
 
 
 # 5. Quantile Regression ----
@@ -184,10 +187,11 @@ get_quant <- function(spec_id){
     mutate(map_dfr(tau, get_rq))
 }
 
+tic()
 res_quant <- mod_specs %>%
   filter(str_detect(dep_var, "(raw|std|ln)")) %>%
   get_furrr(get_quant)
-
+toc()
 
 # 5. SEP Additive ----
 get_sep <- function(spec_id){
