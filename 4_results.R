@@ -8,15 +8,10 @@ rm(list = ls())
 
 # 1. Load Data ----
 load("Data/regression_results.Rdata")
+load("Data/helpers.Rdata")
 
-gwas_dict <- c(zprs_k = "Khera et al. (2019)", 
-               zprs_r = "Richardson et al. (2020)", 
-               zprs_v = "Vogelezang et al. (2020)")
-
-cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
-                "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
-
-# 2. Linear Regressions ----
+# 2. Main Regressions ----
+# CHANGE TO LINE AND RIBBON!
 plot_lm <- function(obs, bmi_var, save_p = FALSE){
   p <- df_lm %>%
     filter(obs == !!obs, bmi_var == !!bmi_var) %>%
@@ -51,7 +46,21 @@ df_lm %>%
   map2(obs, bmi_var, plot_lm, TRUE)
 
 
-# 3. Quantile Regressions ----
+# 3. Attrition Regressions ----
+df_res <- res_attrit %>%
+  filter(prs_var == "prs_k", dep_var == "bmi", sex == "all", age_from < 69) %>%
+  mutate(age_from = ordered(age_from))
+
+ggplot(df_res) +
+  aes(x = age, y = beta, ymin = lci, ymax = uci) +
+  facet_wrap(~ age_from) +
+  geom_ribbon(aes(fill = age_from), color = NA, alpha = 0.2) +
+  geom_line(data = rename(df_res, age_f = age_from),
+            aes(group = age_f)) +
+  geom_line(aes(color = age_from)) 
+
+
+# 4. Quantile Regressions ----
 plot_quant <- function(obs, bmi_var, save_p = FALSE){
   p <- df_quant %>%
     filter(obs == !!obs, bmi_var == !!bmi_var) %>%
@@ -89,7 +98,7 @@ df_quant %>%
   distinct(obs, bmi_var) %$%
   map2(obs, bmi_var, plot_quant, TRUE)
 
-# 4. SEP Additive ----
+# 5. SEP Additive ----
 mod_dict <- c(bivar = "Bivariate", adjust = "+ Polygenic Risk Score")
 
 plot_sep <- function(obs, sex, bmi_var, save_p = FALSE){
@@ -158,7 +167,7 @@ df_sep %>%
   pmap(list(obs, sex, bmi_var), plot_sep, TRUE)
 
 
-# 5. SEP Multiplicative ----
+# 6. SEP Multiplicative ----
 plot_mult <- function(obs, bmi_var, save_p = FALSE){
   p <- df_mult %>%
     pivot_longer(c(margins, mod)) %>%
@@ -202,99 +211,3 @@ plot_mult <- function(obs, bmi_var, save_p = FALSE){
 df_mult %>%
   distinct(obs, bmi_var) %$%
   map2(obs, bmi_var, plot_mult, TRUE)
-
-
-# 6. Splines ----
-make_splines <- function(res){
-  map_dfr(res$boots,
-          ~ enframe(.x, name = "term", value = "coef"),
-          .id = "boot") %>%
-    mutate(boot = as.integer(boot)) %>%
-    right_join(res$splines, by = "term") %>%
-    group_by(boot, prs) %>%
-    summarise(estimate = sum(value*coef),
-              .groups = "drop") %>%
-    rename(prs_val = prs)
-}
-
-df_pred <- df_splines %>%
-  mutate(res = map(res, make_splines))
-
-df_ci <- df_pred %>%
-  mutate(res = map(res, 
-                   ~ .x %>%
-                     group_by(prs_val) %>%
-                     summarise(get_ci(estimate)))) %>%
-  unnest(res)
-
-plot_splines <- function(obs, prs, save_p = FALSE){
-  p <- df_ci %>%
-    filter(obs == !!obs, prs == !!prs) %>%
-    mutate(age = factor(age) %>% ordered(),
-           sex = str_to_title(sex),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict)) %>%
-    ggplot() +
-    aes(x = prs_val, y = beta, ymin = lci, ymax = uci,
-        color = sex, fill = sex) +
-    geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_wrap(~ age, scales = "free_y") +
-    geom_ribbon(color = NA, alpha = 0.2) +
-    geom_line() +
-    theme_bw() +
-    theme(strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom") +
-    labs(x = "Polygenic Risk Score", y = "Marginal Effect", 
-         color = NULL, fill = NULL)
-  
-  if (save_p){
-    glue("Images/splines_{obs}_{prs}.png") %>%
-      ggsave(p, height = 21, width = 29.7, units = "cm")
-  }
-  
-  return(p)
-}
-
-df_ci %>%
-  distinct(obs, prs) %$%
-  map2(obs, prs, plot_splines, TRUE)
-
-# Second Figure
-plot_splines_2 <- function(obs, prs, save_p = FALSE){
-  clean_res <- function(df_res, obs, prs){
-    df_res %>%
-      filter(obs == !!obs, prs == !!prs) %>%
-      mutate(age = factor(age) %>% ordered(),
-             sex = str_to_title(sex),
-             gwas_clean = factor(gwas_dict[prs], gwas_dict))
-  }
-  
-  p <- clean_res(df_pred, obs,prs) %>%
-    unnest(res) %>%
-    mutate(spec_id = spec_id + boot/1000) %>%
-    ggplot() +
-    aes(x = prs_val, y = estimate, color = sex, group = spec_id) +
-    geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_wrap(~ age, scales = "free_y") +
-    geom_line(alpha = 0.05) +
-    geom_line(data = clean_res(rename(df_splines_ob, estimate = beta), obs, prs),
-              size = 1.25) +
-    theme_bw() +
-    theme(strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom") +
-    labs(x = "Polygenic Risk Score", y = "Marginal Effect", 
-         color = NULL, fill = NULL) +
-    guides(color = guide_legend(override.aes = list(alpha = 1)))
-  
-  if (save_p){
-    glue("Images/splines2_{obs}_{prs}.png") %>%
-      ggsave(p, height = 21, width = 29.7, units = "cm")
-  }
-  
-  return(p)
-}
-
-df_ci %>%
-  distinct(obs, prs) %$%
-  map2(obs, prs, plot_splines_2, TRUE)

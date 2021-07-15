@@ -4,300 +4,264 @@ library(glue)
 library(broom)
 library(gallimaufr)
 library(magrittr)
+library(corrr)
+library(ggridges)
 
 rm(list = ls())
 
-# KERNEL DENSITY FOR EACH SAMPLE AND SEX
+# DECIDE KERNAL DENSITY AND SCATTER SAMPLE AND WAY OF MEASURING BMI
 # DENSITY OF PRS BY FOLLOW-UP
 # DENSITY OF BMI BY WHETHER PRS OBSERVED
 
 # 1. Load Data ----
 load("Data/df_long.Rdata")
 
+df_long <- df_long %>%
+  drop_na(matches("prs"), bmi) %>%
+  count(id) %>%
+  full_join(df_long, by = "id") %>%
+  mutate(sample = if_else(n == length(unique(df_long$age)), "cc", "obs", "obs")) %>%
+  select(-n)%>%
+  mutate(age_f = ordered(age))
 
-# 2. Attrition ----
-id_follow <- unique(df_long$age) %>%
-  set_names(., .) %>%
-  map(~ filter(df_long, age == .x) %>%
-        drop_na(bmi) %>%
-        distinct(id) %>%
-        pull(id)) %>%
-  c(list(obs = unique(df_long$id),
-         cc = df_long %>%
-           select(id, age, bmi) %>%
-           pivot_wider(names_from = age, values_from = bmi) %>%
-           drop_na() %>% 
-           pull(id)))
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
+                "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 
+gwas_dict <- c(prs_k = "Khera et al. (2019)", 
+               prs_r = "Richardson et al. (2020)", 
+               prs_v = "Vogelezang et al. (2020)")
 
-df_long %>%
-  mutate(miss_prs = if_any(matches("prs"), is.na) %>%
-           if_else("Observed PRS", "Missing PRS") %>%
-           factor()) %>%
-  ggplot() +
-  aes(x = bmi, color = miss_prs, fill = miss_prs) +
-  facet_wrap(~ age, scales = "free") +
-  geom_density(alpha = 0.3) +
-  scale_color_brewer(palette = "Dark2") +
-  scale_fill_brewer(palette = "Dark2") +
-  theme_bw() +
-  theme(legend.position = "bottom") +
-  labs(x = "BMI", y = "Density", color = NULL, fill = NULL)
-
-df_long %>%
-  drop_na(bmi) %>%
-  mutate(age = factor(age)) %>%
-  ggplot() +
-  aes(x = prs_k) +
-  facet_wrap(~ age, scales = "free") +
-  geom_density(data = distinct(df_long, id, prs_k),
-               color = "grey70", fill = "grey70", alpha = 0.4) +
-  geom_density(aes(color = age, fill = age), alpha = 0.4) +
-  guides(color = FALSE, fill = FALSE) +
-  theme_bw() +
-  labs(x = "Polygenic Risk Score", y = "Density")
+save(cbbPalette, gwas_dict, file = "Data/helpers.Rdata")
 
 
-get_lm <- function(obs_age, reg_age){
-  df_long %>%
-    filter(id %in% id_follow[[!!obs_age]]) %>%
-    drop_na(prs_k, bmi) %>%
-    distinct(id) %>%
-    left_join(df_long, by = "id") %>%
-    filter(age == !!reg_age) %>%
-    lm(bmi ~ prs_k + female, .) %>%
-    tidy(conf.int = TRUE) %>%
-    filter(term == "prs_k") %>%
-    select(beta = 2, lci = 6, uci = 7)
+# 2. Kernel Density BMI ----
+plot_bmi <- function(df){
+  ggplot(df) +
+    aes(x = bmi) +
+    facet_wrap(~ age_f, ncol = 4) +
+    geom_density(data = select(df_long, -age_f), aes(group = age),
+                 color = "grey70", fill = "grey70", alpha = 0.4) +
+    geom_density(aes(color = age_f, fill = age_f), alpha = 0.7) +
+    guides(color = FALSE, fill = FALSE) +
+    theme_bw() +
+    labs(x = "BMI", y = "Density")
 }
 
-attrit_lm <- expand_grid(obs_age = names(id_follow),
-                         reg_age = unique(df_long$age)) %>%
-  mutate(map2_dfr(obs_age, reg_age, get_lm),
-         across(matches("age"), ordered),
-         obs_age = factor(obs_age, names(id_follow)) %>%
-           fct_recode("Observed" = "obs", "Complete Cases" = "cc"))
+plot_bmi(df_long)
+ggsave("Images/density_obs.png",
+       height = 21, width = 29.7, units = "cm")
 
-ggplot(attrit_lm) +
-  aes(x = reg_age, y = beta, ymin = lci, ymax = uci) +
-  facet_wrap(~ obs_age) +
-  geom_hline(yintercept = 0) +
-  geom_line(data = rename(attrit_lm, obs = obs_age),
-            aes(group = obs), color = "grey70") +
-  geom_ribbon(aes(fill = obs_age, group = obs_age), color = NA, alpha = 0.2) +
-  geom_line(aes(color = obs_age, group = obs_age), size = 1) +
-  theme_minimal() +
-  labs(x = "Age", y = "Marginal Effect") +
-  guides(color = FALSE, fill = FALSE)
+df_long %>%
+  filter(sample == "cc") %>%
+  plot_bmi() 
+ggsave("Images/density_cc.png",
+       height = 21, width = 29.7, units = "cm")
 
-
-# 2. Model Objects ----
-id_all <- df %>%
-  select(id, matches("logbmi")) %>%
+# 2. PRS, BMI, Height, Weight Correlations ----
+# PRS-BMI Scatter Plot
+df_scat <- df_long %>%
+  select(age, matches("prs"), bmi) %>%
+  pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs_value") %>%
   drop_na() %>%
-  select(id)
-
-df_bmi <- df %>%
-  select(id, matches("^(logbmi|bmi)\\d+$"), -bmi09) %>%
-  rename_with(~ str_replace(.x, "bmi", "bmi_")) %>%
-  pivot_longer(-id, names_to = c(".value", "age"),
-               names_pattern = "(.*)_(.*)") %>%
-  rename(bmi_ln = logbmi) %>%
-  mutate(bmi = as.numeric(bmi),
-         age = as.numeric(age)) %>%
-  group_by(age) %>%
-  mutate(bmi_std = wtd_scale(bmi)) %>%
+  group_by(age, prs_var) %>%
+  mutate(bmi = wtd_scale(bmi)) %>%
   ungroup()
 
-df_prs <- df %>%
-  select(id, sex, matches("^zprs_"), fsc4_ridit) %>%
-  as_factor() %>%
-  drop_na(matches("zprs"))
-
-sexes <- list(female = "women",
-              male = "men",
-              all = c("women", "men"))
-
-mod_specs <- expand_grid(age = unique(df_bmi$age),
-                         sex = names(sexes),
-                         prs = str_subset(names(df_prs), "zprs"),
-                         bmi_var = str_subset(names(df_bmi), "bmi"),
-                         obs = c("cc", "obs")) %>%
-  mutate(spec_id = row_number(), .before = 1)
-
-save(df, id_all, df_bmi, df_prs, sexes, mod_specs,
-     file = "Data/model_objects.Rdata")
-
-# 3. Scatter Plots ----
-plot_scatter <- function(prs, save_p = FALSE){
-  df_scat <- df_bmi %>%
-    left_join(df_prs, by = "id") %>%
-    select(id, age, bmi, matches("zprs")) %>%
-    pivot_longer(matches("zprs"), names_to = "prs", values_to = "prs_value") %>%
-    drop_na() %>%
-    inner_join(id_all, by = "id") %>%
-    mutate(age = factor(age) %>% ordered(),
-           bmi = as.numeric(bmi)) %>%
-    filter(prs == !!prs)
+plot_scatter <- function(prs_var){
+  p <- df_scat %>%
+    filter(prs_var == !!prs_var) %>%
+    ggplot() +
+    aes(x = prs_value, y = bmi) +
+    facet_wrap(~ age) +
+    geom_hline(yintercept = 0) +
+    geom_vline(xintercept = 0) +
+    geom_jitter(data = filter(df_scat, prs_var == "prs_k") %>% select(-age),
+                alpha = 0.1, color = "grey80") +
+    geom_jitter(alpha = 0.2, color = cbbPalette[4]) 
   
-  p <- ggplot(df_scat) +
-    aes(x = bmi, y = prs_value) +
-    facet_wrap(~ age, ncol = 4) +
-    coord_flip() +
-    geom_jitter(data = select(df_scat, -age), color = "grey70", alpha = 0.2) +
-    geom_jitter(aes(color = age), alpha = 0.2) +
-    guides(color = guide_legend(override.aes = list(alpha = 1))) +
-    theme_bw() +
-    theme(legend.position = "bottom",
-          strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0)) +
-    labs(x = "BMI", y = "Polygenic Risk Score", color = "Age") +
-    guides(color = FALSE)
-  
-  if (save_p){
-    glue("Images/scatter_{prs}.png") %>%
-      ggsave(p, height = 21, width = 29.7, units = "cm")
-  }
+  glue("Images/scatter_bmi_{prs}.png") %>%
+    ggsave(p, height = 21, width = 29.7, units = "cm")
   
   return(p)
 }
 
-mod_specs %>%
-  distinct(prs) %$%
-  walk(prs, plot_scatter, TRUE)
+rm(df_scat)
 
-
-# 4. Kernel Density ----
-df_dens <- df_bmi %>%
-  select(id, age, bmi) %>%
+# PRS and BMI/Height/Weight Correlations
+df_long %>%
+  select(id, matches("prs_"),
+         age, bmi, height, weight) %>%
+  drop_na(bmi) %>%
+  pivot_longer(c(bmi, height, weight), names_to = "phenotype", values_to = "pheno_value") %>%
+  pivot_longer(matches("prs"), names_to = "prs", values_to = "prs_value") %>%
   drop_na() %>%
-  inner_join(id_all, by = "id") %>%
-  mutate(age = factor(age) %>% ordered(),
-         age_f = age,
-         bmi = as.numeric(bmi))
-
-ggplot(df_dens) +
-  aes(x = bmi) +
-  facet_wrap(~ age, ncol = 4) +
-  geom_density(data = select(df_dens, -age), aes(group = age_f),
-               color = "grey70", fill = "grey70", alpha = 0.4) +
-  geom_density(aes(color = age, fill = age), alpha = 0.7) +
-  guides(color = FALSE, fill = FALSE) +
-  theme_bw() +
-  labs(x = "BMI", y = "Density")
-ggsave("Images/density.png",
-       height = 21, width = 29.7, units = "cm")
-
-# 4. PRS x SEP
-gwas_dict <- c(zprs_k = "Khera et al. (2019)", 
-               zprs_r = "Richardson et al. (2020)", 
-               zprs_v = "Vogelezang et al. (2020)")
-
-df_fsc4 <- df %>%
-  distinct(fsc4, fsc4_ridit) %>%
-  mutate(fsc4 = case_when(fsc4 == 0 ~ "I",
-                          fsc4 == 1 ~ "II",
-                          fsc4 == 2 ~ "III",
-                          fsc4 == 3 ~ "IV",
-                          fsc4 == 4 ~ "V Skilled",
-                          fsc4 == 5 ~ "V Unskilled",
-                          TRUE ~ NA_character_) %>%
-           fct_reorder(fsc4) %>% 
-           factor(ordered = TRUE)) %>%
-  drop_na() %>%
-  left_join(df_prs, by = "fsc4_ridit") %>%
-  pivot_longer(matches("zprs"), names_to = "prs_var", values_to = "prs") %>%
-  mutate(fsc4_f = fsc4,
-         gwas_clean = factor(gwas_dict[prs_var], gwas_dict)) %>%
-  select(id, fsc4, fsc4_f, gwas_clean, prs)
-
-ggplot(df_fsc4) +
-  aes(x = prs, group = fsc4_f) +
-  facet_grid(gwas_clean ~ fsc4, switch = "y") +
-  geom_density(data = select(df_fsc4, -fsc4),
-               color = "grey70", fill = "grey70", alpha = 0.4) +
-  geom_density(aes(color = fsc4, fill = fsc4), alpha = 0.7) +
+  mutate(pheno_clean = ifelse(phenotype == "bmi", 
+                              str_to_upper(phenotype),
+                              str_to_title(phenotype)),
+         prs_clean = factor(gwas_dict[prs], gwas_dict)) %>%
+  group_by(age, pheno_clean, prs_clean) %>%
+  summarise(corr = cor(pheno_value, prs_value),
+            .groups = "drop") %>%
+  mutate(age = factor(age)) %>%
+  ggplot() +
+  aes(x = age, y = corr, color = pheno_clean,
+      shape = pheno_clean, group = pheno_clean) +
+  facet_grid(prs_clean ~ ., switch = "y") +
+  geom_hline(yintercept = 0) +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = cbbPalette[6:8]) +
   theme_minimal() +
   theme(legend.position = "bottom",
         strip.placement = "outside",
         strip.text.y.left = element_text(angle = 0)) +
-  labs(x = "Polygenic Risk Score", y = NULL,
-       color = "Social Class", fill = "Social Class")
-ggsave("Images/density_sep.png",
+  labs(x = "Age", y = "Correlation", 
+       color = NULL, shape = NULL)
+ggsave("Images/prs_corr.png",
+       height = 16, width = 21, units = "cm")
+
+# BMI and Height/Weight Correlations
+df_long %>%
+  select(age, bmi, weight, height) %>%
+  drop_na() %>%
+  arrange(age) %>%
+  group_split(age, .keep = FALSE) %>%
+  map_dfr(~ correlate(.x, quiet = TRUE) %>%
+            stretch(),
+          .id = "age") %>%
+  drop_na() %>%
+  mutate(age = unique(df_long$age)[as.numeric(age)] %>%
+           as.factor(),
+         phenotype = str_to_title(y)) %>%
+  filter(x == "bmi") %>%
+  ggplot() +
+  aes(x = age, y = r, group = phenotype,
+      color = phenotype, shape = phenotype) +
+  geom_hline(yintercept = 0) +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = cbbPalette[7:8]) +
+  scale_shape_manual(values = c(17, 15)) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(x = "Age", y = "Correlation", 
+       color = NULL, shape = NULL)
+ggsave("Images/bmi_corr.png",
+       height = 9.9, width = 21, units = "cm")
+
+# 2. Attrition ----
+# Distribution of BMI by PRS Missing/Observed
+df_attrit <- df_long %>%
+  select(id, age, matches("prs"), bmi) %>%
+  pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
+  mutate(across(c(bmi, prs),
+                list(miss = ~ if_else(is.na(.x), "Missing", "Observed") %>%
+                  paste(str_to_upper(cur_column())) %>%
+                  factor()),
+                .names = "{.fn}_{.col}"))
+
+plot_attrit <- function(x_var, prs = "prs_k"){
+  miss_var <- ifelse(x_var == "bmi", "miss_prs", "miss_bmi")
+  x_lab <- ifelse(x_var == "bmi", "BMI", "Polygenic Risk Score")
+
+  p <- df_attrit %>%
+    filter(prs_var == !!prs) %>%
+    ggplot() +
+    aes_string(x = x_var, color = miss_var, fill = miss_var) +
+    facet_wrap(~ age, scales = "free") +
+    geom_density(alpha = 0.3) +
+    scale_color_brewer(palette = "Dark2") +
+    scale_fill_brewer(palette = "Dark2") +
+    theme_bw() +
+    theme(legend.position = "bottom") +
+    labs(x = x_lab, y = "Density",
+         color = NULL, fill = NULL)
+  
+  glue("Images/attrit_{miss_var}_{prs}.png") %>%
+    ggsave(p, height = 21, width = 29.7, units = "cm")
+  
+  return(p)
+}
+
+distinct(df_x, prs_var) %>%
+  expand_grid(x_var = c("bmi", "prs")) %$%
+  map2(x_var, prs_var, plot_attrit)
+
+rm(df_attrit)
+
+
+# 3. PRS x Socio-Economic Position -----
+df_sep <- df_long %>%
+  distinct(id, sep, across(matches("prs"))) %>%
+  pivot_longer(matches("prs"), names_to = "prs", values_to = "prs_value") %>%
+  mutate(gwas_clean = factor(gwas_dict[prs], gwas_dict),
+         sep_f = sep) %>%
+  drop_na()
+
+df_sep %>%
+  mutate(sep = fct_rev(sep)) %>%
+  ggplot() +
+  aes(x = prs_value, y = sep) +
+  facet_grid(gwas_clean ~ ., switch = "y") +
+  geom_density_ridges(fill = cbbPalette[6], alpha = 0.7) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.placement = "outside",
+        strip.text.y.left = element_text(angle = 0)) +
+  labs(x = "Polygenic Risk Score", y = NULL)
+ggsave("Images/prs_ridges_sep.png",
+       height = 21, width = 21, units = "cm")
+
+ggplot(df_sep) +
+  aes(x = prs_value, group = sep) +
+  facet_grid(gwas_clean ~ sep_f, switch = "y") +
+  geom_density(data = select(df_sep, -sep_f),
+               color = "grey70", fill = "grey70", alpha = 0.4) +
+  geom_density(aes(color = sep, fill = sep), alpha = 0.7) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.placement = "outside",
+        strip.text.y.left = element_text(angle = 0)) +
+  scale_color_brewer(palette = "Set1") +
+  scale_fill_brewer(palette = "Set1") +
+  labs(x = "Polygenic Risk Score", y = NULL) +
+  guides(color = FALSE, fill = FALSE)
+ggsave("Images/prs_density_sep.png",
        height = 21, width = 29.7, units = "cm")
 
-df_fsc4 %>%
-  mutate(fsc4 = factor(fsc4, ordered = FALSE)) %>%
+df_sep %>%
   nest(data = -gwas_clean) %>%
   mutate(res = map(data,
-                   ~ lm(prs ~ fsc4, .x) %>%
+                   ~ lm(prs_value ~ sep, .x) %>%
                      tidy(conf.int = TRUE))) %>%
   unnest(res) %>%
   select(-data) %>%
-  filter(str_detect(term, "fsc4")) %>%
-  mutate(term = str_replace(term, "fsc4", "") %>%
-           ordered(levels(df_fsc4$fsc4)) %>%
+  filter(str_detect(term, "^sep")) %>%
+  mutate(term = str_replace(term, "^sep", "") %>%
+           ordered(levels(df_sep$sep)) %>%
            fct_rev()) %>%
   ggplot() +
   aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high) +
   facet_wrap(~ gwas_clean) +
-  geom_hline(yintercept = 0) +
-  geom_pointrange() +
-  theme_minimal() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey70") +
+  geom_pointrange(color = cbbPalette[7]) +
+  theme_bw() +
   coord_flip() +
   labs(x = NULL, y = "Difference in Polygenic Risk Score")
-ggsave("Images/diff_prs_sep.png",
+ggsave("Images/mean_prs_sep.png",
        height = 16, width = 21, units = "cm")
 
-# 5. Probability of Superiority ----
-get_superior <- function(left, right, gwas_clean){
-  set.seed(1)
-  
-  get_prs <- function(fsc4, gwas_clean){
-    df_fsc4 %>%
-      filter(fsc4 == !!fsc4,
-             gwas_clean == !!gwas_clean) %>%
-      sample_n(1000, TRUE) %>%
-      pull(prs)
-  }
-  
-  prs_left <- get_prs(left, gwas_clean)
-  prs_right <- get_prs(right, gwas_clean)
-  
-  tibble(diff = prs_left - prs_right)
-}
-
-
-df_prob <- df_fsc4 %$%
-  expand_grid(left = unique(fsc4),
-              right = unique(fsc4), 
-              gwas_clean = unique(gwas_clean)) %>%
-  mutate(res = pmap(list(left, right, gwas_clean), get_superior)) %>%
-  unnest(res) %>%
-  filter(left != right)
-
-df_prob_x <- df_prob %>%
-  group_by(across(-diff)) %>%
-  summarise(p = sum(diff > 0)/n(),
-            Mean = mean(diff),
-            Median = median(diff),
-            .groups = "drop") %>%
-  pivot_longer(c(p, Mean, Median)) %>%
-  filter(gwas_clean == "Khera et al. (2019)") %>%
-  mutate(x = Inf, y = Inf)
-
-df_prob %>%
-  filter(gwas_clean == "Khera et al. (2019)") %>%
+df_sep %>%
+  mutate(sep = fct_rev(sep)) %>%
   ggplot() +
-  aes(x = diff) +
-  facet_grid(left ~ right) +
-  geom_vline(xintercept = 0, color = "grey40") +
-  geom_vline(data = filter(df_prob_x, name != "p"),
-             aes(xintercept = value, linetype = name,
-                 color = name)) +
-  geom_label(data = filter(df_prob_x, name == "p"),
-             aes(x = x, y = y, label = value)) +
-  geom_density(color = "grey60", fill = "grey60", alpha = 0.4) +
-  theme_minimal() +
-  labs(x = "Differences in Polygenic Risk Scores",
-       y = "Density")
+  aes(x = sep, y = prs_value) +
+  facet_wrap(~ gwas_clean) +
+  geom_jitter(alpha = 0.3, color = cbbPalette[2]) +
+  geom_boxplot(fill = NA, color = "grey50") +
+  geom_violin(fill = NA, color = "grey50") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30") +
+  theme_bw() +
+  coord_flip() +
+  labs(x = NULL, y = "Polygenic Risk Score")
+ggsave("Images/violin_prs_sep.png",
+       height = 9.9, width = 21, units = "cm")

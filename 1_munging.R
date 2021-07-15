@@ -9,21 +9,27 @@ library(ridittools)
 rm(list = ls())
 
 # 1. Load Data ----
-file_path <- "S:/IOECLS_Research/Bann/46c"
-
-load_file <- function(file_name){
-  glue("{file_path}/{file_name}.dta") %>%
-    read_dta() %>%
-    rename_with(str_to_lower)
-}
-
-df_raw <- c("46c_ht_cog", 
-            "magels_fagels",
-            "bmi_khera2019_prs_withlabels_SCRAMBLED",
-            "2021_06_NSHD_two_childBMI_prs_scrambled_seqn340") %>%
-  map(load_file) %>%
-  reduce( ~ full_join(.x, .y, by = "nshdid_db1120", suffix = c("", "_xx")) %>%
-            select(-matches("_xx")))
+# file_path <- "S:/IOECLS_Research/Bann/46c"
+# 
+# load_file <- function(file_name){
+#   glue("{file_path}/{file_name}.dta") %>%
+#     read_dta() %>%
+#     rename_with(str_to_lower)
+# }
+# 
+# set.seed(1)
+# df_raw <- c("46c_ht_cog", 
+#             "magels_fagels",
+#             "bmi_khera2019_prs_withlabels_SCRAMBLED",
+#             "2021_06_NSHD_two_childBMI_prs_scrambled_seqn340") %>%
+#   map(load_file) %>%
+#   reduce( ~ full_join(.x, .y, by = "nshdid_db1120", suffix = c("", "_xx")) %>%
+#             select(-matches("_xx"))) %>%
+#   mutate(id = sample(n()), .before = 1) %>%
+#   select(-nshdid_db1120) %>%
+#   arrange(id)
+# save(df_raw, file = "Data/df_raw.Rdata")
+load("Data/df_raw.Rdata")
 
 # 2. Clean Data ----
 year_to_age <- function(var_name){
@@ -37,8 +43,7 @@ sep_levels <- c("I Professional", "II Intermediate",
                 "IV", "V Unskilled")
 
 df_long <- df_raw %>%
-  rename(id = nshdid_db1120,
-         prs_k = bmi_prs_khera,
+  rename(prs_k = bmi_prs_khera,
          prs_v = childbmi_prs_vogelezang2020, 
          prs_r = childbmi_prs_richardson2020) %>%
   rename_with(~ str_replace(.x, "n", ""), matches("^(h|w)tn")) %>%
@@ -82,20 +87,6 @@ height_corr <- df_long %>%
   summarise(corr = cor(height, bmi),
             .groups = "drop")
   
-height_corr %>%
-  mutate(age = ordered(age)) %>%
-  ggplot() +
-  aes(x = power, y = corr) +
-  facet_wrap(~ age) +
-  geom_hline(yintercept = 0) +
-  geom_line(data = rename(height_corr, age_f = age), 
-            aes(group = age_f), color = "grey90") +
-  geom_line(aes(color = age)) +
-  labs(x = "Power", y = "Correlation") +
-  theme_minimal() +
-  theme(legend.position = "bottom") +
-  guides(color = FALSE)
-
 height_power <- height_corr %>%
   group_by(age) %>%
   mutate(abs_corr = abs(corr)) %>%
@@ -109,3 +100,20 @@ df_long <- df_long %>%
   select(-power)
 
 save(df_long, file = "Data/df_long.Rdata")
+
+# BMI Height Plots
+height_corr %>%
+  mutate(age = ordered(age)) %>%
+  ggplot() +
+  aes(x = power, y = corr) +
+  facet_wrap(~ age) +
+  geom_hline(yintercept = 0) +
+  geom_line(data = rename(height_corr, age_f = age), 
+            aes(group = age_f), color = "grey90") +
+  geom_line(color = "#0072B2") +
+  labs(x = "Power", y = "Correlation") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  guides(color = FALSE)
+ggsave("Images/height_power.png",
+       width = 21, height = 21, units = "cm")
