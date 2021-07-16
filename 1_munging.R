@@ -40,7 +40,12 @@ year_to_age <- function(var_name){
 
 sep_levels <- c("I Professional", "II Intermediate",
                 "III Skilled Non-Manual", "III Skilled Manual",
-                "IV", "V Unskilled")
+                "IV Semi-Skilled", "V Unskilled")
+
+make_ridit <- function(x){
+  toridit(table(x))[x] %>%
+    as.numeric()
+}
 
 df_long <- df_raw %>%
   rename(prs_k = bmi_prs_khera,
@@ -63,18 +68,38 @@ df_long <- df_raw %>%
            as.numeric() %>%
            sep_levels[.] %>%
            factor(levels = sep_levels),
-         sep_ridit = toridit(table(sep))[sep] %>% as.numeric()) %>%
+         sep_ridit = make_ridit(sep),
+         medu = case_when(between(magels, 10, 20) ~ (magels - 10) / 10,
+                          between(magels, 20, 23) ~ 1,
+                          TRUE ~ NA_real_),
+         medu_ridit = factor(medu) %>% make_ridit()
+  ) %>%
   select(id, survey_weight, matches("^(prs|bmi|wt|ht)_"), 
-         female, sep, sep_ridit) %>%
+         female, sep, sep_ridit, medu, medu_ridit) %>%
   pivot_longer(matches("^(bmi|ht|wt)_"),
                names_to = c(".value", "age"),
                names_pattern = "(.*)_(.*)") %>%
   mutate(age = as.numeric(age)) %>%
   arrange(id, age) %>%
   rename(height = ht, weight = wt) %>%
+  mutate(bmi = ifelse(bmi > 80, NA, bmi),
+         weight = ifelse(bmi >= 195, NA, weight)) %>%
   zap_formats() %>%
   zap_label() %>%
   zap_labels()
+
+# Whole Body Measures
+df_long <- df_raw %>%
+  mutate(across(c(dxawbft09, dxawbln09), 
+                ~ ifelse(.x %in% attr(.x, "labels"), NA, .x)),
+         height = ifelse(htn09 >= 7777, NA, htn09),
+         fat_ratio = ifelse(dxaangyr09 >= 7, NA, dxaangyr09),
+         fat_mass = dxawbft09*0.001 / (height^2),
+         lean_mass = dxawbln09*0.001 / (height^2), 
+         across(fat_ratio:lean_mass, wtd_scale),
+         age = 63) %>%
+  select(id, fat_ratio, fat_mass, lean_mass, age) %>%
+  full_join(df_long, by = c("id", "age"))
 
 # 3. BMI Height Correction ----
 height_corr <- df_long %>%
@@ -86,7 +111,7 @@ height_corr <- df_long %>%
   group_by(age, power) %>%
   summarise(corr = cor(height, bmi),
             .groups = "drop")
-  
+
 height_power <- height_corr %>%
   group_by(age) %>%
   mutate(abs_corr = abs(corr)) %>%

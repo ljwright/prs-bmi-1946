@@ -33,7 +33,8 @@ res_prs <- clean_res(res_prs) %>%
 # Plots
 plot_main <- function(df, facet_form, colors, legend_pos){
   ggplot(df) +
-    aes(x = age_rev, y = beta, ymin = lci, ymax = uci, color = sex_clean) +
+    aes(x = age_rev, y = beta, ymin = lci, ymax = uci, 
+        color = sex_clean, shape = sex_clean) +
     facet_grid(facet_form, scales = "free_x", switch = "y") +
     coord_flip() +
     geom_hline(yintercept = 0, linetype = "dashed") +
@@ -44,7 +45,7 @@ plot_main <- function(df, facet_form, colors, legend_pos){
           strip.text.y.left = element_text(angle = 0),
           legend.position = legend_pos,
           panel.spacing = unit(1, "lines")) +
-    labs(x = NULL, y = NULL, color = NULL)
+    labs(x = NULL, y = NULL, color = NULL, shape = NULL)
 }
 
 # Main Results
@@ -73,7 +74,9 @@ ggsave("Images/prs_all_corrected.png", height = 21, width = 29.7, units = "cm")
 
 
 # 3. Attrition Regressions ----
-res_attrit <- clean_res(res_attrit)
+res_attrit <- clean_res(res_attrit) %>%
+  mutate(age_from = factor(age_from) %>%
+           fct_recode("Observed" = "0", "Complete Cases" = "2"))
 
 plot_attrit <- function(prs_var, dep_var, sex, save_p = FALSE){
   df_attrit <- res_attrit %>%

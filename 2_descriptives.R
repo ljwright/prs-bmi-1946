@@ -6,12 +6,13 @@ library(gallimaufr)
 library(magrittr)
 library(corrr)
 library(ggridges)
+library(summarytools)
+library(officer)
+library(flextable)
 
 rm(list = ls())
 
-# DECIDE KERNAL DENSITY AND SCATTER SAMPLE AND WAY OF MEASURING BMI
-# DENSITY OF PRS BY FOLLOW-UP
-# DENSITY OF BMI BY WHETHER PRS OBSERVED
+# DECIDE KERNAL DENSITY AND SCATTER SAMPLE
 
 # 1. Load Data ----
 load("Data/df_long.Rdata")
@@ -22,7 +23,8 @@ df_long <- df_long %>%
   full_join(df_long, by = "id") %>%
   mutate(sample = if_else(n == length(unique(df_long$age)), "cc", "obs", "obs")) %>%
   select(-n)%>%
-  mutate(age_f = ordered(age))
+  mutate(age_f = ordered(age)) %>%
+  arrange(id, age)
 
 cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
                 "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
@@ -31,10 +33,51 @@ gwas_dict <- c(prs_k = "Khera et al. (2019)",
                prs_r = "Richardson et al. (2020)", 
                prs_v = "Vogelezang et al. (2020)")
 
+dep_dict <- c(bmi = "BMI", bmi_corrected = "Corrected BMI",
+              fat_ratio  = "Fat Ratio", fat_mass  = "Fat Mass", lean_mass = "Lean Mass",
+              height = "Height", weight = "Weight")
+
 save(cbbPalette, gwas_dict, file = "Data/helpers.Rdata")
 
 
-# 2. Kernel Density BMI ----
+# 2. Quintiles of PRS ----
+get_means <- function(prs_var, dep_var, age){
+  df_long %>%
+    filter(age == !!age) %>%
+    select(prs = all_of(prs_var), dep_var = all_of(dep_var)) %>%
+    drop_na() %>%
+    mutate(prs = cut_number(prs, 5)) %>%
+    lm(dep_var ~ -1 + prs, .) %>%
+    tidy(conf.int = TRUE) %>%
+    mutate(quintile = row_number()) %>%
+    select(quintile, beta = 2, lci = 6, uci = 7)
+}
+
+df_quint <- expand_grid(prs_var = str_subset(names(df_long), "prs"),
+            dep_var = str_subset(names(df_long), "^(bmi|height|weight|fat|lean)"),
+            age = unique(df_long$age)) %>%
+  filter(!(dep_var %in% c("fat_ratio", "fat_mass", "lean_mass") & age != 63)) %>%
+  mutate(res = pmap(list(prs_var, dep_var, age), get_means)) %>%
+  unnest(res) %>%
+  mutate(prs_clean = factor(gwas_dict[prs_var], gwas_dict),
+         quintile = factor(quintile) %>% fct_rev(),
+         dep_clean = factor(dep_dict[dep_var], dep_dict))
+
+df_quint %>%
+  filter(dep_var %in% c("fat_ratio", "fat_mass", "lean_mass")) %>%
+  ggplot() +
+  aes(x = quintile, y = beta, ymin = lci, ymax = uci) +
+  facet_grid(prs_clean ~ dep_clean, scales = "free", switch = "y") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_pointrange() +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.placement = "outside",
+        strip.text.y.left = element_text(angle = 0)) +
+  labs(x = "Quintile", y = "Mean")
+
+# 3. Kernel Density BMI ----
 plot_bmi <- function(df){
   ggplot(df) +
     aes(x = bmi) +
@@ -57,7 +100,7 @@ df_long %>%
 ggsave("Images/density_cc.png",
        height = 21, width = 29.7, units = "cm")
 
-# 2. PRS, BMI, Height, Weight Correlations ----
+# 4. PRS, BMI, Height, Weight Correlations ----
 # PRS-BMI Scatter Plot
 df_scat <- df_long %>%
   select(age, matches("prs"), bmi) %>%
@@ -149,7 +192,7 @@ df_long %>%
 ggsave("Images/bmi_corr.png",
        height = 9.9, width = 21, units = "cm")
 
-# 2. Attrition ----
+# 5. Attrition ----
 # Distribution of BMI by PRS Missing/Observed
 df_attrit <- df_long %>%
   select(id, age, matches("prs"), bmi) %>%
@@ -190,7 +233,7 @@ distinct(df_x, prs_var) %>%
 rm(df_attrit)
 
 
-# 3. PRS x Socio-Economic Position -----
+# 6. PRS x Socio-Economic Position -----
 df_sep <- df_long %>%
   distinct(id, sep, across(matches("prs"))) %>%
   pivot_longer(matches("prs"), names_to = "prs", values_to = "prs_value") %>%
@@ -265,3 +308,30 @@ df_sep %>%
   labs(x = NULL, y = "Polygenic Risk Score")
 ggsave("Images/violin_prs_sep.png",
        height = 9.9, width = 21, units = "cm")
+
+
+# 7. Descriptive Table ----
+flx <- df_long %>%
+  drop_na(matches("prs"), bmi) %>%
+  select(age, bmi) %>%
+  group_by(age) %>%
+  descr() %>%
+  tb() %>%
+  select(age, n = n.valid, mean, sd, skewness, min, max) %>%
+  rename_with(str_to_title) %>%
+  rename(SD = Sd) %>%
+  flextable() %>%
+  border_remove() %>%
+  border_inner_h(border = fp_border(color = "grey50", width = 1, style = "dashed"),
+                 part = "body") %>% 
+  hline_top(border = fp_border(color = "black", width = 2), part = "all") %>% 
+  hline_bottom(border = fp_border(color = "black", width = 2), part = "all") %>%
+  fix_border_issues(part = "all") %>% 
+  align(align = "center", part = "all") %>% 
+  valign(valign = "center", part = "all") %>%
+  colformat_double(j = 3:7, digits = 2) %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 10, part = "all") %>% 
+  autofit()
+flx
+save_as_docx(flx, path = "Tables/descriptives.docx")

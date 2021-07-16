@@ -17,27 +17,36 @@ plan(multisession, workers = 4)
 # 1. Load Data ----
 load("Data/df_long.Rdata")
 
-df_long <- df_long %>%
+df_reg <- df_long %>%
   group_by(age) %>%
   mutate(across(c(bmi, bmi_corrected),
                 list(std = wtd_scale,
                      ln = log,
                      rank = ~ percent_rank(.x)*100))) %>%
   ungroup() %>%
-  rename(bmi_raw = bmi, bmi_corrected_raw = bmi_corrected) %>%
-  select(-height, -weight)
+  rename(bmi_raw = bmi, bmi_corrected_raw = bmi_corrected)
 
-ages <- unique(df_long$age)
+rm(df_long)
+
+# Model Objects
+ages <- unique(df_reg$age)
 
 sexes <- list(female = 1,
               male = 0,
               all = c(0, 1))
 
+dep_vars <- names(df_reg) %>%
+  str_subset("^(bmi|height|weight|fat|lean)")
+
 mod_specs <- expand_grid(age = ages,
                          sex = names(sexes),
-                         prs_var = str_subset(names(df_long), "prs"),
-                         dep_var = str_subset(names(df_long), "^bmi")) %>%
+                         prs_var = str_subset(names(df_reg), "prs"),
+                         dep_var = dep_vars) %>%
+  filter(!(dep_var %in% c("fat_mass", "fat_ratio", "lean_mass") & age != 63)) %>%
   mutate(spec_id = row_number(), .before = 1)
+
+sep_specs <- mod_specs %>%
+  expand_grid(sep_var = c("medu", "medu_ridit", "sep_ridit"))
 
 
 # 2. Model Functions ----
@@ -52,12 +61,11 @@ get_spec <- function(spec_id){
 get_df <- function(spec_id){
   spec <- get_spec(spec_id)
   
-  df_long %>%
+  df_reg %>%
     rename(prs = all_of(spec$prs_var), 
            dep_var = all_of(spec$dep_var)) %>%
     filter(female %in% sexes[[!!spec$sex]],
-           age == !!spec$age) %>%
-    select(id, dep_var, prs, sep_ridit, female)
+           age == !!spec$age)
 }
 
 get_form <- function(spec_id, covars = "prs"){
@@ -85,13 +93,21 @@ get_furrr <- function(df_specs, func){
     unnest(res)
 }
 
+get_furrr2 <- function(df_specs, var, func){
+  df_specs %>%
+    mutate(res = future_map2(spec_id, {{ var }}, func, 
+                             .progress = TRUE,
+                             .options = furrr_options(seed = NULL))) %>%
+    unnest(res)
+}
+
 
 # 3. Main Regressions ----
 get_lm <- function(spec_id){
   spec <- get_spec(spec_id)
   
   df_mod <- get_df(spec_id) %>%
-    select(-sep_ridit) %>%
+    select(id, dep_var, prs, female) %>%
     drop_na()
   
   mod_form <- get_form(spec_id)
@@ -129,10 +145,10 @@ toc()
 
 
 # 4. Attrition Regressions ----
-attrit_sample <- function(age_from, spec_id){
+attrit_sample <- function(spec_id, age_from){
   spec <- get_spec(spec_id)
   
-  df_long %>%
+  df_reg %>%
     filter(age >= age_from) %>%
     drop_na(all_of(c(spec$prs_var, spec$dep_var))) %>%
     count(id) %>%
@@ -140,14 +156,14 @@ attrit_sample <- function(age_from, spec_id){
     pull(id)
 }
 
-get_attrit <- function(age_from, spec_id){
+get_attrit <- function(spec_id, age_from){
   spec <- get_spec(spec_id)
   
   df_mod <- get_df(spec_id)
   
   if (age_from > 0){
     df_mod <- df_mod %>%
-      filter(id %in% attrit_sample(!!age_from, !!spec_id))
+      filter(id %in% attrit_sample(!!spec_id, !!age_from))
   }
   
   get_form(spec_id) %>%
@@ -160,12 +176,9 @@ get_attrit <- function(age_from, spec_id){
 
 tic()
 res_attrit <- expand_grid(mod_specs, age_from = c(0, ages)) %>%
-  filter(age >= age_from) %>%
-  mutate(future_map2_dfr(age_from, spec_id, get_attrit, 
-                         .progress = TRUE,
-                         .options = furrr_options(seed = NULL)),
-         age_from = factor(age_from) %>%
-           fct_recode("Observed" = "0", "Complete Cases" = "2"))
+  filter(age >= age_from,
+         str_detect(dep_var, "bmi")) %>%
+  get_furrr2(age_from, get_attrit)
 toc()
 
 
@@ -178,7 +191,7 @@ get_quant <- function(spec_id){
   get_rq <- function(tau){
     as.formula(mod_form) %>%
       rq(tau = tau, data = df_mod) %>%
-      tidy(conf.int = TRUE) %>%
+      broom::tidy(conf.int = TRUE) %>%
       filter(term == "prs") %>%
       select(beta = estimate, lci = conf.low, uci = conf.high)
   }
@@ -194,22 +207,19 @@ res_quant <- mod_specs %>%
 toc()
 
 # 5. SEP Additive ----
-get_sep <- function(spec_id){
+get_sep <- function(spec_id, sep_var){
   
   spec <- get_spec(spec_id)
   
-  df_mod <- get_df(spec_id) %>% 
+  df_mod <- get_df(spec_id) %>%
+    rename(sep_var = all_of(!!sep_var)) %>%
+    select(id, dep_var, prs, sep_var, female) %>%
     drop_na()
-  
-  mod_form <- get_form(spec_id)
   
   get_boot <- function(boot){
     set.seed(boot)
     
     df_m <- sample_frac(df_mod, replace = TRUE)
-    
-    mod <- as.formula(mod_form) %>%
-      lm(df_m)
     
     run_sep <- function(covars){
       mod <- get_form(spec_id, covars) %>%
@@ -218,25 +228,26 @@ get_sep <- function(spec_id){
       
       coefs <- coef(mod)
       
-      c(coefs["sep_ridit"],
+      c(coefs["sep_var"],
         r2 = broom::glance(mod)[[1]]) %>%
         enframe(name = "term", value = "estimate")
     }
     
+    res <- bind_rows(bivar = run_sep("sep_var"),
+                     adjust = run_sep(c("prs", "sep_var")),
+                     .id = "mod")
+    
     r2_prs <- get_form(spec_id, "prs") %>%
       as.formula() %>%
       lm(df_m) %>%
-      broom::glance(mod) %>%
+      broom::glance() %>%
       pull(1)
     
-    bind_rows(bivar = run_sep("sep_ridit"),
-              adjust = run_sep(c("prs", "sep_ridit")),
-              .id = "mod") %>%
+    res %>%
       uncount(ifelse(term == "r2", 2, 1), .id = "id") %>%
       mutate(term = ifelse(id == 2, "r2_diff", term),
              estimate = ifelse(id == 2, estimate - r2_prs, estimate))
   }
-  
   
   map_dfr(1:500, get_boot, .id = "boot") %>%
     group_by(mod, term) %>%
@@ -247,33 +258,35 @@ get_sep <- function(spec_id){
 }
 
 tic()
-res_sep <- get_furrr(mod_specs, get_sep)
+res_sep <- get_furrr2(sep_specs, sep_var, get_sep)
 toc()
 
-
-# 6. SEP Multiplicative
-sep_vals <- count(df_long, sep_ridit) %>%
-  drop_na() %>%
-  pull(1) %>%
-  c(0, ., 1)
-
-get_mult <- function(spec_id){
+# 7. SEP Multiplicative ----
+get_mult <- function(spec_id, sep_var){
   
-  spec <- get_spec(spec_id)
+  sep_vals <- df_reg %>%
+    rename(sep_var = all_of(!!sep_var)) %>%
+    count(sep_var) %>%
+    drop_na() %>%
+    pull(1) %>%
+    c(0, ., 1) %>%
+    unique()
   
-  df_mod <- get_df(spec_id)
+  df_mod <- get_df(spec_id) %>%
+    rename(sep_var = all_of(!!sep_var))
   
-  mod <- get_form(spec_id, "prs*sep_ridit") %>%
+  mod <- get_form(spec_id, "prs*sep_var") %>%
     as.formula() %>%
     lm(df_mod)
   
-  mrg <- margins(mod, at = list(sep_ridit = sep_vals), variables = "prs") %>%
-    tidy(conf.int = TRUE) %>%
-    select(sep_ridit = 3, beta = 4, p = 7, lci = 8, uci = 9) %>%
+  mrg <- margins(mod, at = list(sep_var = sep_vals), variables = "prs") %>%
+    broom::tidy(conf.int = TRUE) %>%
+    select(sep_values = 3, beta = 4, p = 7, lci = 8, uci = 9) %>%
+    distinct() %>%
     list()
   
-  res <- tidy(mod, conf.int = TRUE) %>%
-    filter(term == "prs:sep_ridit") %>%
+  res <- broom::tidy(mod, conf.int = TRUE) %>%
+    filter(term == "prs:sep_var") %>%
     select(beta = 2, p = 5, lci = 6, uci = 7) %>%
     bind_cols(glance(mod) %>% select(r2 = 1, n = 12)) %>%
     list()
@@ -283,12 +296,39 @@ get_mult <- function(spec_id){
 }
 
 tic()
-res_mult <- get_furrr(mod_specs, get_mult)
+res_mult <- get_furrr2(sep_specs, sep_var, get_mult)
 toc()
 
-rm(sep_vals)
+# 8. SEP Quantile Regression ----
+get_sep_quant <- function(spec_id, sep_var){
+  
+  df_mod <- get_df(spec_id) %>%
+    rename(sep_var = all_of(!!sep_var))
+  
+  mod_form <- get_form(spec_id, "prs*sep_var")
+  
+  get_rq <- function(tau){
+    as.formula(mod_form) %>%
+      rq(tau = tau, data = df_mod) %>%
+      broom::tidy(conf.int = TRUE) %>%
+      filter(term == "prs:sep_var") %>%
+      select(beta = estimate, lci = conf.low, uci = conf.high)
+  }
+  
+  tibble(tau = 1:9/10) %>%
+    mutate(map_dfr(tau, get_rq))
+  
+}
 
-# 8. Save Objects ----
+tic()
+res_sep_quant <- sep_specs %>%
+  filter(str_detect(dep_var, "bmi")) %>%
+  get_furrr2(sep_specs, sep_var, get_sep_quant)
+toc()
+
+
+# 10. Save Objects ----
 save(res_prs, res_attrit, res_quant,
-     res_sep, res_mult, mod_specs, get_ci,
+     res_sep, res_mult, res_sep_quant,
+     mod_specs, get_ci,
      file = "Data/regression_results.Rdata")
