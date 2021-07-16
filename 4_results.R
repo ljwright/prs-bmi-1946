@@ -10,70 +10,118 @@ rm(list = ls())
 load("Data/regression_results.Rdata")
 load("Data/helpers.Rdata")
 
+dep_dict <- c(raw = "Raw BMI", std = "Standardised",
+              ln = "% Change", rank = "Percentile Rank")
+
+clean_res <- function(df_res){
+  df_res %>%
+    mutate(age_f = ordered(age),
+           age_rev = fct_rev(age_f),
+           sex_clean = str_to_title(sex),
+           corrected = str_detect(dep_var, "_corrected"),
+           dep_type = str_replace(dep_var, "_corrected", "") %>%
+             str_replace("bmi_", ""),
+           dep_clean = factor(dep_dict[dep_type], dep_dict),
+           prs_clean = factor(gwas_dict[prs_var], gwas_dict))
+}
+
+
 # 2. Main Regressions ----
-# CHANGE TO LINE AND RIBBON!
-plot_lm <- function(obs, bmi_var, save_p = FALSE){
-  p <- df_lm %>%
-    filter(obs == !!obs, bmi_var == !!bmi_var) %>%
-    mutate(age = factor(age) %>% fct_rev(),
-           sex = str_to_title(sex),
-           stat = ifelse(term == "prs", "Effect Size", "R-Squared"),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict)) %>%
-    ggplot() +
-    aes(x = age, y = beta, ymin = lci, ymax = uci, color = sex) +
-    geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(gwas_clean ~ stat, scales = "free_x", switch = "y") +
+res_prs <- clean_res(res_prs) %>%
+  mutate(term_clean = ifelse(term == "prs", "Effect Size", "R-Squared"))
+
+# Plots
+plot_main <- function(df, facet_form, colors, legend_pos){
+  ggplot(df) +
+    aes(x = age_rev, y = beta, ymin = lci, ymax = uci, color = sex_clean) +
+    facet_grid(facet_form, scales = "free_x", switch = "y") +
     coord_flip() +
+    geom_hline(yintercept = 0, linetype = "dashed") +
     geom_pointrange(position = position_dodge(0.5)) +
-    scale_color_brewer(palette = "Set1") +
+    scale_color_manual(values = cbbPalette[colors]) +
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom",
+          legend.position = legend_pos,
           panel.spacing = unit(1, "lines")) +
     labs(x = NULL, y = NULL, color = NULL)
+}
+
+# Main Results
+res_prs %>%
+  filter(dep_var == "bmi_raw", sex == "all") %>%
+  plot_main("prs_clean ~ term_clean", 4, "off")
+ggsave("Images/prs_main.png", height = 21, width = 21, units = "cm")
+
+# Main Results by Sex
+res_prs %>%
+  filter(dep_var == "bmi_raw", sex != "all") %>%
+  plot_main("prs_clean ~ term_clean", 6:7, "bottom")
+ggsave("Images/prs_sex.png", height = 21, width = 21, units = "cm")
+
+# Main Results x Definition of BMI
+res_prs %>%
+  filter(corrected == FALSE, sex == "all", term == "prs") %>%
+  plot_main("prs_clean ~ dep_clean", 4, "off")
+ggsave("Images/prs_all_dep.png", height = 21, width = 29.7, units = "cm")
+
+# Main Results x Definition of Corrected BMI
+res_prs %>%
+  filter(corrected == TRUE, sex == "all", term == "prs") %>%
+  plot_main("prs_clean ~ dep_clean", 4, "off")
+ggsave("Images/prs_all_corrected.png", height = 21, width = 29.7, units = "cm")
+
+
+# 3. Attrition Regressions ----
+res_attrit <- clean_res(res_attrit)
+
+plot_attrit <- function(prs_var, dep_var, sex, save_p = FALSE){
+  df_attrit <- res_attrit %>%
+    filter(dep_var == !!dep_var, 
+           prs_var == !!prs_var,
+           sex == !!sex, 
+           age_from != "69")
+  
+  p <- ggplot(df_attrit) +
+    aes(x = age_f, y = beta, ymin = lci, ymax = uci) +
+    facet_wrap(~ age_from) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_ribbon(aes(group = age_from), alpha = 0.2,
+                fill = cbbPalette[6]) +
+    geom_line(data = rename(df_attrit, age_samp = age_from),
+              aes(group = age_samp), color = "grey70") +
+    geom_line(aes(group = age_from), 
+              color = cbbPalette[6])  +
+    theme_bw() +
+    theme(panel.spacing = unit(1, "lines")) +
+    labs(x = "Age", y = "Marginal Effect")
   
   if (save_p){
-    glue("Images/res_{obs}_{bmi_var}.png") %>%
-      ggsave(p, height = 29.7, width = 21, units = "cm")
+    glue("Images/attrit_{prs_var}_{sex}_{dep_var}.png") %>%
+      ggsave(p, height = 21, width = 29.7, units = "cm")
   }
   
   return(p)
 }
 
-df_lm %>%
-  distinct(obs, bmi_var) %$%
-  map2(obs, bmi_var, plot_lm, TRUE)
-
-
-# 3. Attrition Regressions ----
-df_res <- res_attrit %>%
-  filter(prs_var == "prs_k", dep_var == "bmi", sex == "all", age_from < 69) %>%
-  mutate(age_from = ordered(age_from))
-
-ggplot(df_res) +
-  aes(x = age, y = beta, ymin = lci, ymax = uci) +
-  facet_wrap(~ age_from) +
-  geom_ribbon(aes(fill = age_from), color = NA, alpha = 0.2) +
-  geom_line(data = rename(df_res, age_f = age_from),
-            aes(group = age_f)) +
-  geom_line(aes(color = age_from)) 
+res_attrit %>%
+  distinct(prs_var, dep_var, sex) %$%
+  pwalk(list(prs_var, dep_var, sex), plot_attrit, TRUE)
 
 
 # 4. Quantile Regressions ----
-plot_quant <- function(obs, bmi_var, save_p = FALSE){
-  p <- df_quant %>%
-    filter(obs == !!obs, bmi_var == !!bmi_var) %>%
-    mutate(age = factor(age) %>% ordered(),
-           sex = str_to_title(sex),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict),
-           tau = glue("{tau*100}th") %>%
-             fct_reorder(tau)) %>%
+res_quant <- clean_res(res_quant) %>%
+  mutate(tau_clean = glue("{tau*100}th") %>%
+           fct_reorder(tau))
+
+plot_quant <- function(dep_var, sex, save_p = FALSE){
+  p <- res_quant %>%
+    filter(dep_var == !!dep_var, sex == !!sex) %>%
     ggplot() +
-    aes(x = tau, y = beta, ymin = lci, ymax = uci,
-        color = age, fill = age, group = age) +
+    aes(x = tau_clean, y = beta, ymin = lci, ymax = uci,
+        color = age_f, fill = age_f, group = age_f) +
     geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(gwas_clean ~ sex, scales = "free", switch = "y") +
+    facet_grid(prs_clean ~ ., scales = "free", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.1) +
     geom_line() +
     theme_minimal() +
@@ -83,111 +131,101 @@ plot_quant <- function(obs, bmi_var, save_p = FALSE){
           axis.text.x = element_text(angle = 45, hjust = 1),
           panel.spacing = unit(1, "lines")) +
     labs(x = "Percentile", y = NULL, color = "Age", fill = "Age") +
-    guides(color = guide_legend(nrow = 2),
+    guides(color = guide_legend(nrow = 2), 
            fill = guide_legend(nrow = 2))
   
   if (save_p){
-    glue("Images/quant_{obs}_{bmi_var}.png") %>%
-      ggsave(p, height = 21, width = 29.7, units = "cm")
+    glue("Images/quant_{sex}_{dep_var}.png") %>%
+      ggsave(p, height = 21, width = 21, units = "cm")
   }
   
   return(p)
 }
 
-df_quant %>%
-  distinct(obs, bmi_var) %$%
-  map2(obs, bmi_var, plot_quant, TRUE)
+res_quant %>%
+  distinct(dep_var, sex) %$%
+  walk2(dep_var, sex, plot_quant, TRUE)
+
 
 # 5. SEP Additive ----
 mod_dict <- c(bivar = "Bivariate", adjust = "+ Polygenic Risk Score")
 
-plot_sep <- function(obs, sex, bmi_var, save_p = FALSE){
-  df_res <- df_sep %>%
-    filter(sex == !!sex, obs == !!obs, bmi_var == !!bmi_var,
-           !(term == "r2_diff" & mod == "bivar")) %>%
-    mutate(age = factor(age),
-           mod = ifelse(term == "r2_diff", NA, mod),
-           mod_clean = factor(mod_dict[mod], mod_dict),
-           sex = str_to_title(sex),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict),
-           term_clean = case_when(term == "r2" ~ "R-Squared",
-                                  term == "r2_diff" ~ "Addtional Variance Explained by SEP",
-                                  TRUE ~ "Marginal Effect") %>%
-             fct_rev())
+res_sep <- clean_res(res_sep) %>%
+  filter(term != "r2_diff") %>%
+  mutate(mod_clean = factor(mod_dict[mod], mod_dict),
+         term_clean = case_when(term == "r2" ~ "R-Squared",
+                                term == "r2_diff" ~ "Addtional Variance Explained by SEP",
+                                TRUE ~ "Marginal Effect"))
+
+plot_sep <- function(dep_var, sex, save_p = FALSE){
+  df_res <- res_sep %>%
+    filter(dep_var == !!dep_var, sex == !!sex)
+  
+  plot_ind <- function(df_res, switch = "y"){
+    ggplot(df_res) +
+      aes(x = age_f, y = beta, ymin = lci, ymax = uci, 
+          color = mod_clean, fill = mod_clean, group = mod_clean) +
+      facet_grid(prs_clean ~ term_clean, scales = "free", switch = switch) +
+      geom_hline(yintercept = 0, linetype = "dashed") +
+      geom_ribbon(color = NA, alpha = 0.2) +
+      geom_line() +
+      scale_color_manual(values = cbbPalette[6:7]) +
+      scale_fill_manual(values = cbbPalette[6:7]) +
+      theme_minimal() +
+      theme(strip.placement = "outside",
+            strip.text.y.left = element_text(angle = 0),
+            legend.position = "bottom",
+            panel.spacing = unit(1, "lines")) +
+      labs(x = "Age", y = NULL, color = "Model", fill = "Model")
+  }
   
   p1 <- df_res %>%
-    filter(str_detect(term, "^fsc4")) %>%
-    ggplot() +
-    aes(x = age, y = beta, ymin = lci, ymax = uci, 
-        color = mod_clean, fill = mod_clean, group = mod_clean) +
-    geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(gwas_clean ~ term_clean, scales = "free", switch = "y") +
-    geom_ribbon(color = NA, alpha = 0.2) +
-    geom_line() +
-    scale_color_manual(values = cbbPalette[6:7]) +
-    scale_fill_manual(values = cbbPalette[6:7]) +
-    theme_minimal() +
-    theme(strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0),
-          legend.position = "bottom",
-          panel.spacing = unit(1, "lines")) +
-    labs(x = "Age", y = NULL, color = "Model", fill = "Model")
+    filter(term == "sep_ridit") %>%
+    plot_ind()
   
   p2 <- df_res %>%
     filter(term == "r2") %>%
-    ggplot() +
-    aes(x = age, y = beta, ymin = lci, ymax = uci) +
-    facet_grid(gwas_clean ~ term_clean) +
-    geom_pointrange(aes(color = mod_clean), position = position_dodge(0.5)) +
-    geom_pointrange(data = filter(df_res, term == "r2_diff"),
-                    color = cbbPalette[8]) +
-    scale_color_manual(values = cbbPalette[6:7]) +
-    theme_minimal() +
-    theme(strip.placement = "outside",
-          strip.text.y.left = element_text(angle = 0),
-          strip.text.y  = element_blank(),
-          panel.spacing = unit(1, "lines")) +
-    guides(color = FALSE) +
-    labs(x = "Age", y = NULL) 
+    plot_ind(NULL)  +
+    guides(color = FALSE, fill = FALSE) +
+    theme(strip.text.y  = element_blank())
   
-  p <- p1 + p2  + plot_layout(widths = c(1, 2)) +
+  p <- p1 + p2 +
     plot_layout(guides = "collect") & 
     theme(legend.position = 'bottom')
   
   if (save_p){
-    glue("Images/sep_{obs}_{bmi_var}_{sex}.png") %>%
+    glue("Images/sep_{sex}_{dep_var}.png") %>%
       ggsave(p, height = 21, width = 29.7, units = "cm")
   }
   
   return(p)
 }
 
-df_sep %>%
-  distinct(obs, sex, bmi_var) %$%
-  pmap(list(obs, sex, bmi_var), plot_sep, TRUE)
+res_sep %>%
+  distinct(dep_var, sex) %$%
+  walk2(dep_var, sex, plot_sep, TRUE)
 
 
 # 6. SEP Multiplicative ----
-plot_mult <- function(obs, bmi_var, save_p = FALSE){
-  p <- df_mult %>%
-    pivot_longer(c(margins, mod)) %>%
-    unnest(value) %>%
-    mutate(ridit = case_when(fsc4_ridit == 0 ~ "Lowest SEP",
-                             fsc4_ridit == 1 ~ "Highest SEP",
-                             is.na(fsc4_ridit) ~ "Interaction Term",
-                             TRUE ~ NA_character_) %>%
-             factor(c("Lowest SEP", "Highest SEP", "Interaction Term")),
-           age = factor(age)) %>%
-    filter(!is.na(ridit)) %>%
-    filter(obs == !!obs, bmi_var == !!bmi_var) %>%
-    mutate(sex = str_to_title(sex),
-           # age = factor(age),
-           gwas_clean = factor(gwas_dict[prs], gwas_dict)) %>%
+res_mult <- res_mult %>%
+  pivot_longer(c(margins, mod)) %>%
+  unnest(value) %>%
+  mutate(sep_clean = case_when(sep_ridit == 0 ~ "Lowest SEP",
+                               sep_ridit == 1 ~ "Highest SEP",
+                               is.na(sep_ridit) ~ "Interaction Term",
+                               TRUE ~ NA_character_) %>%
+           factor(c("Lowest SEP", "Highest SEP", "Interaction Term"))) %>%
+  filter(!is.na(sep_clean)) %>%
+  clean_res()
+
+plot_mult <- function(dep_var, sex, save_p = FALSE){
+  p <- res_mult %>%
+    filter(dep_var == !!dep_var, sex == !!sex) %>%
     ggplot() +
-    aes(x = age, y = beta, ymin = lci, ymax = uci,
-        color = ridit, fill = ridit, group = ridit) +
+    aes(x = age_f, y = beta, ymin = lci, ymax = uci,
+        color = sep_clean, fill = sep_clean, group = sep_clean) +
     geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(gwas_clean ~ sex, scales = "free_x", switch = "y") +
+    facet_grid(prs_clean ~ ., scales = "free_x", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
     scale_color_brewer(palette = "Dark2") +
@@ -201,13 +239,13 @@ plot_mult <- function(obs, bmi_var, save_p = FALSE){
          fill = "Social Class")
   
   if (save_p){
-    glue("Images/mult_{obs}_{bmi_var}.png") %>%
-      ggsave(p, height = 21, width = 29.7, units = "cm")
+    glue("Images/mult_{sex}_{dep_var}.png") %>%
+      ggsave(p, height = 21, width = 21, units = "cm")
   }
   
   return(p)
 }
 
-df_mult %>%
-  distinct(obs, bmi_var) %$%
-  map2(obs, bmi_var, plot_mult, TRUE)
+res_mult %>%
+  distinct(dep_var, sex) %$%
+  walk2(dep_var, sex, plot_mult, TRUE)
