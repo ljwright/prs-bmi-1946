@@ -309,8 +309,48 @@ df_sep %>%
 ggsave("Images/violin_prs_sep.png",
        height = 9.9, width = 21, units = "cm")
 
+# 7. Probability of Superiority ----
+set.seed(1)
+df_long %>%
+  uncount(ifelse(sample == "cc", 2, 1), .id = "n") %>%
+  mutate(sample = ifelse(n == 2, "obs", sample)) %>%
+  select(matches("prs"), bmi, female, age, sample) %>%
+  pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
+  drop_na() %>%
+  group_by(age, female, prs_var, sample) %>%
+  sample_n(1e4, replace = TRUE) %>%
+  ungroup() %>%
+  mutate(odd = ifelse(row_number() %% 2 == 0, 1, 2)) %>% 
+  pivot_wider(id_cols = c(female, age, prs_var, sample),
+              names_from = odd,
+              names_glue = "{.value}_{odd}",
+              values_from = c(bmi, prs)) %>%
+  unnest(c(bmi_1, bmi_2, prs_1, prs_2)) %>%
+  mutate(bmi_diff = ifelse(prs_1 > prs_2, bmi_1 - bmi_2, bmi_2 - bmi_1)) %>%
+  group_by(age, prs_var, sample) %>%
+  summarise(ps = sum(bmi_diff > 0)/n(),
+            .groups = "drop") %>%
+  mutate(age = factor(age),
+         sample = ifelse(sample == "cc", "Complete Cases", "Observed Sample") %>%
+           fct_rev(),
+         gwas_clean = factor(gwas_dict[prs_var], gwas_dict)) %>%
+  ggplot() +
+  aes(x = age, y = ps, group = gwas_clean,
+      color = gwas_clean, shape = gwas_clean) +
+  facet_wrap(~ sample) +
+  geom_hline(yintercept = 0.5, linetype = "dashed") +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = cbbPalette[c(4, 6:7)]) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(x = "Age", y = "Probability of Superiority",
+       color = "Polygenic Risk Score",
+       shape = "Polygenic Risk Score")
+ggsave("Images/prob_superiority.png",
+       height = 9.9, width = 21, units = "cm")
 
-# 7. Descriptive Table ----
+# 8. Descriptive Table ----
 flx <- df_long %>%
   drop_na(matches("prs"), bmi) %>%
   select(age, bmi) %>%

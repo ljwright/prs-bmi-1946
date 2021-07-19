@@ -209,6 +209,38 @@ toc()
 # 5. SEP Additive ----
 get_sep <- function(spec_id, sep_var){
   
+  df_mod <- get_df(spec_id) %>%
+    rename(sep_var = all_of(!!sep_var)) %>%
+    select(id, dep_var, prs, sep_var, female) %>%
+    drop_na()
+  
+  run_sep <- function(covars){
+    mod <- get_form(spec_id, covars) %>%
+      as.formula() %>%
+      lm(df_mod)
+    
+    broom::tidy(mod, conf.int = TRUE) %>%
+      filter(term == "sep_var") %>%
+      select(beta = 2, p = 5, lci = 6, uci = 7) %>%
+      bind_cols(broom::glance(mod) %>%
+                  select(r2 = 1, n = 12))
+  }
+  
+  bind_rows(bivar = run_sep("sep_var"),
+            adjust = run_sep(c("prs", "sep_var")),
+            .id = "mod")
+  
+}
+
+tic()
+res_sep <- sep_specs %>%
+  filter(sep_var == "sep_ridit") %>%
+  get_furrr2(sep_var, get_sep)
+toc()
+
+# Bootstraps for R2
+get_sep_boot <- function(spec_id, sep_var){
+  
   spec <- get_spec(spec_id)
   
   df_mod <- get_df(spec_id) %>%
@@ -258,7 +290,9 @@ get_sep <- function(spec_id, sep_var){
 }
 
 tic()
-res_sep <- get_furrr2(sep_specs, sep_var, get_sep)
+res_sep_boot <- sep_specs %>%
+  filter(sep_var == "sep_ridit") %>%
+  get_furrr2(sep_var, get_sep_boot)
 toc()
 
 # 7. SEP Multiplicative ----
