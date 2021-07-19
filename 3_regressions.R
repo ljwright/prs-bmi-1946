@@ -38,11 +38,14 @@ sexes <- list(female = 1,
 dep_vars <- names(df_reg) %>%
   str_subset("^(bmi|height|weight|fat|lean)")
 
+alt_dep <- c("fat_ratio", "fat_mass", "lean_mass")
+
 mod_specs <- expand_grid(age = ages,
                          sex = names(sexes),
                          prs_var = str_subset(names(df_reg), "prs"),
                          dep_var = dep_vars) %>%
-  filter(!(dep_var %in% c("fat_mass", "fat_ratio", "lean_mass") & age != 63)) %>%
+  filter(!(dep_var %in% alt_dep) |
+           (dep_var %in% alt_dep & age == 63)) %>%
   mutate(spec_id = row_number(), .before = 1)
 
 sep_specs <- mod_specs %>%
