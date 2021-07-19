@@ -118,6 +118,7 @@ height_power <- height_corr %>%
   slice_min(abs_corr, n = 1) %>%
   ungroup() %>%
   select(age, power)
+save(height_power, file = "Data/height_power.Rdata")
 
 df_long <- df_long %>%
   left_join(height_power, by = "age") %>%
@@ -125,6 +126,7 @@ df_long <- df_long %>%
   select(-power)
 
 save(df_long, file = "Data/df_long.Rdata")
+
 
 # BMI Height Plots
 height_corr %>%

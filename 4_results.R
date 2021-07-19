@@ -7,6 +7,7 @@ library(patchwork)
 rm(list = ls())
 
 # 1. Load Data ----
+load("Data/df_long.Rdata")
 load("Data/regression_results.Rdata")
 load("Data/helpers.Rdata")
 
@@ -30,6 +31,29 @@ clean_res <- function(df_res){
 res_prs <- clean_res(res_prs) %>%
   mutate(term_clean = ifelse(term == "prs", "Effect Size", "R-Squared"))
 
+plot_tbl <- df_long %>%
+  select(age, matches("prs"), bmi, female) %>%
+  pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
+  drop_na() %>%
+  group_by(age, prs_var) %>%
+  summarise(`Mean BMI` = mean(bmi), SD = sd(bmi),
+            .groups = "drop") %>%
+  pivot_longer(c(`Mean BMI`, `SD`), values_to = "beta", names_to = "stat") %>%
+  mutate(age = factor(age) %>% fct_rev(),
+         beta = round(beta, 2)) %>%
+  ggplot() +
+  aes(x = age, label = beta, y = stat) +
+  facet_grid(prs_var ~ stat, scales = "free") +
+  geom_text(size = 3) +
+  coord_flip() +
+  labs(x = NULL, y = NULL) +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        strip.text.y = element_blank(),
+        panel.grid = element_blank(),
+        strip.placement = "outside",
+        panel.spacing = unit(1, "lines"))
+
 # Plots
 plot_main <- function(df, facet_form, colors, legend_pos){
   ggplot(df) +
@@ -49,10 +73,12 @@ plot_main <- function(df, facet_form, colors, legend_pos){
 }
 
 # Main Results
-res_prs %>%
+p <- res_prs %>%
   filter(dep_var == "bmi_raw", sex == "all") %>%
-  plot_main("prs_clean ~ term_clean", 4, "off")
+  plot_main("prs_clean ~ term_clean", 1, "off")
+p + plot_tbl + patchwork::plot_layout(widths = c(4, 1.1))
 ggsave("Images/prs_main.png", height = 21, width = 21, units = "cm")
+rm(p, plot_tbl)
 
 # Main Results by Sex
 res_prs %>%
@@ -63,20 +89,23 @@ ggsave("Images/prs_sex.png", height = 21, width = 21, units = "cm")
 # Main Results x Definition of BMI
 res_prs %>%
   filter(corrected == FALSE, sex == "all", term == "prs") %>%
-  plot_main("prs_clean ~ dep_clean", 4, "off")
+  plot_main("prs_clean ~ dep_clean", 1, "off")
 ggsave("Images/prs_all_dep.png", height = 21, width = 29.7, units = "cm")
 
 # Main Results x Definition of Corrected BMI
 res_prs %>%
   filter(corrected == TRUE, sex == "all", term == "prs") %>%
-  plot_main("prs_clean ~ dep_clean", 4, "off")
+  plot_main("prs_clean ~ dep_clean", 1, "off")
 ggsave("Images/prs_all_corrected.png", height = 21, width = 29.7, units = "cm")
+
+# Main Results - Fat Mass, etc.
+XXXXXX
 
 
 # 3. Attrition Regressions ----
-res_attrit <- clean_res(res_attrit) %>%
-  mutate(age_from = factor(age_from) %>%
-           fct_recode("Observed" = "0", "Complete Cases" = "2"))
+res_attrit <- clean_res(res_attrit) # %>%
+# mutate(age_from = factor(age_from) %>%
+#          fct_recode("Observed" = "0", "Complete Cases" = "2"))
 
 plot_attrit <- function(prs_var, dep_var, sex, save_p = FALSE){
   df_attrit <- res_attrit %>%
@@ -108,7 +137,9 @@ plot_attrit <- function(prs_var, dep_var, sex, save_p = FALSE){
 }
 
 res_attrit %>%
-  distinct(prs_var, dep_var, sex) %$%
+  distinct(prs_var, dep_var, sex) %>%
+  filter(sex == "all",
+         dep_var %in% c("bmi_raw", "bmi_std")) %$%
   pwalk(list(prs_var, dep_var, sex), plot_attrit, TRUE)
 
 
@@ -117,37 +148,41 @@ res_quant <- clean_res(res_quant) %>%
   mutate(tau_clean = glue("{tau*100}th") %>%
            fct_reorder(tau))
 
-plot_quant <- function(dep_var, sex, save_p = FALSE){
-  p <- res_quant %>%
-    filter(dep_var == !!dep_var, sex == !!sex) %>%
-    ggplot() +
-    aes(x = tau_clean, y = beta, ymin = lci, ymax = uci,
-        color = age_f, fill = age_f, group = age_f) +
+plot_quant <- function(dep_var, sex, prs_var, save_p = FALSE){
+  df_res <- res_quant %>%
+    filter(sex == !!sex, dep_var == !!dep_var, prs_var == !!prs_var)
+  
+  p <- ggplot(df_res) +
+    aes(x = tau_clean, y = beta, ymin = lci, ymax = uci, group = age) +
     geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(prs_clean ~ ., scales = "free", switch = "y") +
-    geom_ribbon(color = NA, alpha = 0.1) +
-    geom_line() +
-    theme_minimal() +
+    facet_wrap(~ age_f) +
+    geom_line(data = select(df_res, -age_f), color = "grey70") +
+    geom_ribbon(color = NA, fill = cbbPalette[6], alpha = 0.2) +
+    geom_line(color = cbbPalette[6]) +
+    theme_bw() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
           legend.position = "bottom",
           axis.text.x = element_text(angle = 45, hjust = 1),
           panel.spacing = unit(1, "lines")) +
-    labs(x = "Percentile", y = NULL, color = "Age", fill = "Age") +
+    labs(x = "Percentile", y = "Marginal Effect",
+         color = "Age", fill = "Age") +
     guides(color = guide_legend(nrow = 2), 
            fill = guide_legend(nrow = 2))
   
   if (save_p){
-    glue("Images/quant_{sex}_{dep_var}.png") %>%
-      ggsave(p, height = 21, width = 21, units = "cm")
+    glue("Images/quant_{sex}_{dep_var}_{prs_var}.png") %>%
+      ggsave(p, height = 21, width = 29.7, units = "cm")
   }
   
   return(p)
 }
 
+
 res_quant %>%
-  distinct(dep_var, sex) %$%
-  walk2(dep_var, sex, plot_quant, TRUE)
+  distinct(dep_var, sex, prs_var) %>%
+  filter(sex == "all", dep_var == "bmi_raw") %$%
+  pwalk(list(dep_var, sex, prs_var), plot_quant, TRUE)
 
 
 # 5. SEP Additive ----
@@ -198,14 +233,16 @@ plot_sep <- function(dep_var, sex, save_p = FALSE){
   
   if (save_p){
     glue("Images/sep_{sex}_{dep_var}.png") %>%
-      ggsave(p, height = 21, width = 29.7, units = "cm")
+      ggsave(p, height = 16, width = 21, units = "cm")
   }
   
   return(p)
 }
 
 res_sep %>%
-  distinct(dep_var, sex) %$%
+  distinct(dep_var, sex) %>%
+  filter(sex == "all",
+         dep_var %in% c("bmi_raw", "bmi_std")) %$%
   walk2(dep_var, sex, plot_sep, TRUE)
 
 
@@ -228,7 +265,7 @@ plot_mult <- function(dep_var, sex, save_p = FALSE){
     aes(x = age_f, y = beta, ymin = lci, ymax = uci,
         color = sep_clean, fill = sep_clean, group = sep_clean) +
     geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(prs_clean ~ ., scales = "free_x", switch = "y") +
+    facet_grid(prs_clean ~ name, scales = "free_x", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
     scale_color_brewer(palette = "Dark2") +
@@ -236,6 +273,7 @@ plot_mult <- function(dep_var, sex, save_p = FALSE){
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
+          strip.text.x = element_blank(),
           legend.position = "bottom",
           panel.spacing = unit(1, "lines")) +
     labs(x = "Age", y = NULL, color = "Social Class",
@@ -243,12 +281,14 @@ plot_mult <- function(dep_var, sex, save_p = FALSE){
   
   if (save_p){
     glue("Images/mult_{sex}_{dep_var}.png") %>%
-      ggsave(p, height = 21, width = 21, units = "cm")
+      ggsave(p, height = 16, width = 21, units = "cm")
   }
   
   return(p)
 }
 
 res_mult %>%
-  distinct(dep_var, sex) %$%
+  distinct(dep_var, sex) %>%
+  filter(sex == "all",
+         dep_var %in% c("bmi_raw", "bmi_std")) %$%
   walk2(dep_var, sex, plot_mult, TRUE)

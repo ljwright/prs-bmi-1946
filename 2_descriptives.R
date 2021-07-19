@@ -54,8 +54,8 @@ get_means <- function(prs_var, dep_var, age){
 }
 
 df_quint <- expand_grid(prs_var = str_subset(names(df_long), "prs"),
-            dep_var = str_subset(names(df_long), "^(bmi|height|weight|fat|lean)"),
-            age = unique(df_long$age)) %>%
+                        dep_var = str_subset(names(df_long), "^(bmi|height|weight|fat|lean)"),
+                        age = unique(df_long$age)) %>%
   filter(!(dep_var %in% c("fat_ratio", "fat_mass", "lean_mass") & age != 63)) %>%
   mutate(res = pmap(list(prs_var, dep_var, age), get_means)) %>%
   unnest(res) %>%
@@ -92,13 +92,13 @@ plot_bmi <- function(df){
 
 plot_bmi(df_long)
 ggsave("Images/density_obs.png",
-       height = 21, width = 29.7, units = "cm")
+       height = 18, width = 36, units = "cm")
 
 df_long %>%
   filter(sample == "cc") %>%
   plot_bmi() 
 ggsave("Images/density_cc.png",
-       height = 21, width = 29.7, units = "cm")
+       height = 18, width = 36, units = "cm")
 
 # 4. PRS, BMI, Height, Weight Correlations ----
 # PRS-BMI Scatter Plot
@@ -199,14 +199,14 @@ df_attrit <- df_long %>%
   pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
   mutate(across(c(bmi, prs),
                 list(miss = ~ if_else(is.na(.x), "Missing", "Observed") %>%
-                  paste(str_to_upper(cur_column())) %>%
-                  factor()),
+                       paste(str_to_upper(cur_column())) %>%
+                       factor()),
                 .names = "{.fn}_{.col}"))
 
 plot_attrit <- function(x_var, prs = "prs_k"){
   miss_var <- ifelse(x_var == "bmi", "miss_prs", "miss_bmi")
   x_lab <- ifelse(x_var == "bmi", "BMI", "Polygenic Risk Score")
-
+  
   p <- df_attrit %>%
     filter(prs_var == !!prs) %>%
     ggplot() +
@@ -226,12 +226,33 @@ plot_attrit <- function(x_var, prs = "prs_k"){
   return(p)
 }
 
-distinct(df_x, prs_var) %>%
+distinct(df_attrit, prs_var) %>%
   expand_grid(x_var = c("bmi", "prs")) %$%
   map2(x_var, prs_var, plot_attrit)
 
 rm(df_attrit)
 
+df_attrit %>%
+  nest(data = -c(age, prs_var)) %>%
+  mutate(map_dfr(data, 
+                 ~ glm(miss_bmi ~ prs, binomial, .x) %>%
+                   tidy(conf.int = TRUE) %>%
+                   filter(term == "prs") %>%
+                   select(beta = 2, lci = 6, uci = 7))) %>%
+  select(-data) %>%
+  mutate(age = factor(age) %>% fct_rev(),
+         prs_clean = factor(gwas_dict[prs_var], gwas_dict)) %>%
+  ggplot() +
+  aes(x = age, y = beta, ymin = lci, ymax = uci) +
+  facet_wrap(~ prs_clean, nrow = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_pointrange() +
+  theme_bw() +
+  theme(axis.text.y = element_text(angle = 0)) +
+  coord_flip() +
+  labs(x = "Age", y = "Difference in PRS (Observed vs Missing BMI)")
+ggsave("Images/attrit_means.png", 
+       height = 16, width = 21, units = "cm")
 
 # 6. PRS x Socio-Economic Position -----
 df_sep <- df_long %>%
@@ -275,7 +296,7 @@ ggsave("Images/prs_density_sep.png",
 df_sep %>%
   nest(data = -gwas_clean) %>%
   mutate(res = map(data,
-                   ~ lm(prs_value ~ sep, .x) %>%
+                   ~ lm(prs_value ~ - 1 + sep, .x) %>%
                      tidy(conf.int = TRUE))) %>%
   unnest(res) %>%
   select(-data) %>%
@@ -287,12 +308,16 @@ df_sep %>%
   aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high) +
   facet_wrap(~ gwas_clean) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey70") +
-  geom_pointrange(color = cbbPalette[7]) +
+  geom_pointrange() +
   theme_bw() +
   coord_flip() +
-  labs(x = NULL, y = "Difference in Polygenic Risk Score")
+  labs(x = NULL, y = "Average Polygenic Risk Score")
 ggsave("Images/mean_prs_sep.png",
        height = 16, width = 21, units = "cm")
+
+sep_means <- df_sep %>% 
+  group_by(gwas_clean, sep) %>%
+  summarise(prs_value = mean(prs_value), .groups = "drop")
 
 df_sep %>%
   mutate(sep = fct_rev(sep)) %>%
@@ -303,21 +328,27 @@ df_sep %>%
   geom_boxplot(fill = NA, color = "grey50") +
   geom_violin(fill = NA, color = "grey50") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey30") +
+  geom_point(data = sep_means, shape = 5, color = "grey50", 
+             size = 3, stroke = 1) +
   theme_bw() +
   coord_flip() +
   labs(x = NULL, y = "Polygenic Risk Score")
 ggsave("Images/violin_prs_sep.png",
-       height = 9.9, width = 21, units = "cm")
+       height = 16, width = 21, units = "cm")
 
+rm(sep_means)
 
 # 7. Descriptive Table ----
+load("Data/height_power.Rdata")
+
 flx <- df_long %>%
   drop_na(matches("prs"), bmi) %>%
   select(age, bmi) %>%
   group_by(age) %>%
   descr() %>%
   tb() %>%
-  select(age, n = n.valid, mean, sd, skewness, min, max) %>%
+  left_join(height_power, by = "age") %>%
+  select(age, n = n.valid, mean, sd, skewness, min, max, `power correction` = power) %>%
   rename_with(str_to_title) %>%
   rename(SD = Sd) %>%
   flextable() %>%
