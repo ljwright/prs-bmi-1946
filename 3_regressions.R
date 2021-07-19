@@ -188,16 +188,12 @@ get_quant <- function(spec_id){
   
   mod_form <- get_form(spec_id)
   
-  get_rq <- function(tau){
-    as.formula(mod_form) %>%
-      rq(tau = tau, data = df_mod) %>%
-      broom::tidy(conf.int = TRUE) %>%
-      filter(term == "prs") %>%
-      select(beta = estimate, lci = conf.low, uci = conf.high)
-  }
+  as.formula(mod_form) %>%
+    rq(tau = 1:9/10, data = df_mod) %>%
+    broom::tidy(conf.int = TRUE) %>%
+    filter(term == "prs") %>%
+    select(tau, beta = estimate, lci = conf.low, uci = conf.high)
   
-  tibble(tau = 1:9/10) %>%
-    mutate(map_dfr(tau, get_rq))
 }
 
 tic()
@@ -242,7 +238,6 @@ get_sep <- function(spec_id, sep_var){
 
 tic()
 res_sep <- sep_specs %>%
-  filter(sep_var == "sep_ridit") %>%
   get_furrr2(sep_var, get_sep)
 toc()
 
@@ -349,23 +344,18 @@ get_sep_quant <- function(spec_id, sep_var){
   
   mod_form <- get_form(spec_id, "prs*sep_var")
   
-  get_rq <- function(tau){
-    as.formula(mod_form) %>%
-      rq(tau = tau, data = df_mod) %>%
-      broom::tidy(conf.int = TRUE) %>%
-      filter(term == "prs:sep_var") %>%
-      select(beta = estimate, lci = conf.low, uci = conf.high)
-  }
-  
-  tibble(tau = 1:9/10) %>%
-    mutate(map_dfr(tau, get_rq))
+  as.formula(mod_form) %>%
+    rq(tau = 1:9/10, data = df_mod) %>%
+    broom::tidy(conf.int = TRUE) %>%
+    filter(term == "prs:sep_var") %>%
+    select(tau, beta = estimate, lci = conf.low, uci = conf.high)
   
 }
 
 tic()
 res_sep_quant <- sep_specs %>%
-  filter(str_detect(dep_var, "bmi")) %>%
-  get_furrr2(sep_specs, sep_var, get_sep_quant)
+  filter(str_detect(dep_var, "(raw|std|ln)")) %>%
+  get_furrr2(sep_var, get_sep_quant)
 toc()
 
 
