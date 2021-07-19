@@ -88,24 +88,34 @@ ggsave("Images/prs_sex.png", height = 21, width = 21, units = "cm")
 
 # Main Results x Definition of BMI
 res_prs %>%
-  filter(corrected == FALSE, sex == "all", term == "prs") %>%
+  filter(corrected == FALSE, str_detect(dep_var, "bmi"),
+         sex == "all", term == "prs") %>%
   plot_main("prs_clean ~ dep_clean", 1, "off")
 ggsave("Images/prs_all_dep.png", height = 21, width = 29.7, units = "cm")
 
 # Main Results x Definition of Corrected BMI
 res_prs %>%
-  filter(corrected == TRUE, sex == "all", term == "prs") %>%
+  filter(corrected == TRUE, str_detect(dep_var, "bmi"),
+         sex == "all", term == "prs") %>%
   plot_main("prs_clean ~ dep_clean", 1, "off")
 ggsave("Images/prs_all_corrected.png", height = 21, width = 29.7, units = "cm")
 
 # Main Results - Fat Mass, etc.
-XXXXXX
+alt_dict <- c(fat_ratio = "Fat Ratio", fat_mass = "Fat Mass", lean_mass = "Lean Mass")
 
+res_prs %>%
+  filter(dep_var %in% c("fat_ratio", "fat_mass", "lean_mass"),
+         sex == "all", term == "prs") %>%
+  mutate(dep_clean = factor(alt_dict[dep_var], alt_dict)) %>%
+  plot_main("~ prs_clean", 1, "off") +
+  aes(x = dep_clean) +
+  labs(x = NULL)
+ggsave("Images/prs_alternative.png", height = 21, width = 29.7, units = "cm")
 
 # 3. Attrition Regressions ----
-res_attrit <- clean_res(res_attrit) # %>%
-# mutate(age_from = factor(age_from) %>%
-#          fct_recode("Observed" = "0", "Complete Cases" = "2"))
+res_attrit <- clean_res(res_attrit) %>%
+  mutate(age_from = factor(age_from) %>%
+           fct_recode("Observed" = "0", "Complete Cases" = "2"))
 
 plot_attrit <- function(prs_var, dep_var, sex, save_p = FALSE){
   df_attrit <- res_attrit %>%
@@ -178,7 +188,6 @@ plot_quant <- function(dep_var, sex, prs_var, save_p = FALSE){
   return(p)
 }
 
-
 res_quant %>%
   distinct(dep_var, sex, prs_var) %>%
   filter(sex == "all", dep_var == "bmi_raw") %$%
@@ -188,48 +197,54 @@ res_quant %>%
 # 5. SEP Additive ----
 mod_dict <- c(bivar = "Bivariate", adjust = "+ Polygenic Risk Score")
 
+sep_dict <- c(sep_ridit = "Father's Social Class (Ridit)",
+              medu = "Mother's Education",
+              medu_ridit = "Mother's Education (Ridit)")
+
 res_sep <- clean_res(res_sep) %>%
-  filter(term != "r2_diff") %>%
   mutate(mod_clean = factor(mod_dict[mod], mod_dict),
-         term_clean = case_when(term == "r2" ~ "R-Squared",
-                                term == "r2_diff" ~ "Addtional Variance Explained by SEP",
-                                TRUE ~ "Marginal Effect"))
+         sep_clean = factor(sep_dict[sep_var], sep_dict)) %>%
+  mutate(across(c(beta, lci, uci),
+         ~ ifelse(str_detect(sep_var, "medu"), -.x, .x)))
+
+res_sep %>%
+  filter(sex == "all", dep_var == "bmi_raw") %>%
+  distinct(age_f, prs_clean, mod_clean, r_diff, sep_clean) %>%
+  ggplot() +
+  aes(x = age_f, y = r_diff, color = mod_clean, 
+      group = mod_clean, shape = mod_clean) +
+  facet_grid(prs_clean ~ sep_clean, scales = "free", switch = "y") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = cbbPalette[6:7]) +
+  scale_fill_manual(values = cbbPalette[6:7]) +
+  theme_minimal() +
+  theme(strip.placement = "outside",
+        strip.text.y.left = element_text(angle = 0),
+        legend.position = "bottom",
+        panel.spacing = unit(1, "lines")) +
+  labs(x = "Age", y = NULL, color = "Model", shape = "Model")
+ggsave("Images/sep_r.png", height = 21, width = 29.7, units = "cm")
 
 plot_sep <- function(dep_var, sex, save_p = FALSE){
-  df_res <- res_sep %>%
-    filter(dep_var == !!dep_var, sex == !!sex)
-  
-  plot_ind <- function(df_res, switch = "y"){
-    ggplot(df_res) +
-      aes(x = age_f, y = beta, ymin = lci, ymax = uci, 
-          color = mod_clean, fill = mod_clean, group = mod_clean) +
-      facet_grid(prs_clean ~ term_clean, scales = "free", switch = switch) +
-      geom_hline(yintercept = 0, linetype = "dashed") +
-      geom_ribbon(color = NA, alpha = 0.2) +
-      geom_line() +
-      scale_color_manual(values = cbbPalette[6:7]) +
-      scale_fill_manual(values = cbbPalette[6:7]) +
-      theme_minimal() +
-      theme(strip.placement = "outside",
-            strip.text.y.left = element_text(angle = 0),
-            legend.position = "bottom",
-            panel.spacing = unit(1, "lines")) +
-      labs(x = "Age", y = NULL, color = "Model", fill = "Model")
-  }
-  
-  p1 <- df_res %>%
-    filter(term == "sep_ridit") %>%
-    plot_ind()
-  
-  p2 <- df_res %>%
-    filter(term == "r2") %>%
-    plot_ind(NULL)  +
-    guides(color = FALSE, fill = FALSE) +
-    theme(strip.text.y  = element_blank())
-  
-  p <- p1 + p2 +
-    plot_layout(guides = "collect") & 
-    theme(legend.position = 'bottom')
+  p <- res_sep %>%
+    filter(dep_var == !!dep_var, sex == !!sex) %>%
+    ggplot() +
+    aes(x = age_f, y = beta, ymin = lci, ymax = uci, 
+        color = mod_clean, fill = mod_clean, group = mod_clean) +
+    facet_grid(prs_clean ~ sep_clean, scales = "free", switch = "y") +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_ribbon(color = NA, alpha = 0.2) +
+    geom_line() +
+    scale_color_manual(values = cbbPalette[6:7]) +
+    scale_fill_manual(values = cbbPalette[6:7]) +
+    theme_minimal() +
+    theme(strip.placement = "outside",
+          strip.text.y.left = element_text(angle = 0),
+          legend.position = "bottom",
+          panel.spacing = unit(1, "lines")) +
+    labs(x = "Age", y = NULL, color = "Model", fill = "Model")
   
   if (save_p){
     glue("Images/sep_{sex}_{dep_var}.png") %>%
@@ -250,12 +265,13 @@ res_sep %>%
 res_mult <- res_mult %>%
   pivot_longer(c(margins, mod)) %>%
   unnest(value) %>%
-  mutate(sep_clean = case_when(sep_ridit == 0 ~ "Lowest SEP",
-                               sep_ridit == 1 ~ "Highest SEP",
-                               is.na(sep_ridit) ~ "Interaction Term",
+  mutate(sep_level = case_when(sep_values == 0 ~ "Lowest SEP",
+                               sep_values == 1 ~ "Highest SEP",
+                               is.na(sep_values) ~ "Interaction Term",
                                TRUE ~ NA_character_) %>%
-           factor(c("Lowest SEP", "Highest SEP", "Interaction Term"))) %>%
-  filter(!is.na(sep_clean)) %>%
+           factor(c("Lowest SEP", "Highest SEP", "Interaction Term")),
+         sep_clean = factor(sep_dict[sep_var], sep_dict)) %>%
+  filter(!is.na(sep_level)) %>%
   clean_res()
 
 plot_mult <- function(dep_var, sex, save_p = FALSE){
@@ -263,9 +279,9 @@ plot_mult <- function(dep_var, sex, save_p = FALSE){
     filter(dep_var == !!dep_var, sex == !!sex) %>%
     ggplot() +
     aes(x = age_f, y = beta, ymin = lci, ymax = uci,
-        color = sep_clean, fill = sep_clean, group = sep_clean) +
+        color = sep_level, fill = sep_level, group = sep_level) +
     geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(prs_clean ~ name, scales = "free_x", switch = "y") +
+    facet_grid(prs_clean ~ sep_clean, scales = "free_x", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
     scale_color_brewer(palette = "Dark2") +
@@ -273,7 +289,6 @@ plot_mult <- function(dep_var, sex, save_p = FALSE){
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
-          strip.text.x = element_blank(),
           legend.position = "bottom",
           panel.spacing = unit(1, "lines")) +
     labs(x = "Age", y = NULL, color = "Social Class",
@@ -281,7 +296,7 @@ plot_mult <- function(dep_var, sex, save_p = FALSE){
   
   if (save_p){
     glue("Images/mult_{sex}_{dep_var}.png") %>%
-      ggsave(p, height = 16, width = 21, units = "cm")
+      ggsave(p, height = 21, width = 29.7, units = "cm")
   }
   
   return(p)

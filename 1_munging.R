@@ -72,6 +72,7 @@ df_long <- df_raw %>%
          medu = case_when(between(magels, 10, 20) ~ (magels - 10) / 10,
                           between(magels, 20, 23) ~ 1,
                           TRUE ~ NA_real_),
+         medu = -medu,
          medu_ridit = factor(medu) %>% make_ridit()
   ) %>%
   select(id, survey_weight, matches("^(prs|bmi|wt|ht)_"), 

@@ -372,6 +372,7 @@ df_long %>%
   geom_line() +
   geom_point() +
   scale_color_manual(values = cbbPalette[c(4, 6:7)]) +
+  scale_y_continuous(labels = scales::percent) +
   theme_minimal() +
   theme(legend.position = "bottom") +
   labs(x = "Age", y = "Probability of Superiority",
