@@ -226,9 +226,17 @@ get_sep <- function(spec_id, sep_var){
                   select(r2 = 1, n = 12))
   }
   
+  r_comp <- get_form(spec_id) %>%
+    as.formula() %>%
+    lm(df_mod) %>%
+    broom::glance(mod) %>%
+    pull(1)
+  
   bind_rows(bivar = run_sep("sep_var"),
             adjust = run_sep(c("prs", "sep_var")),
-            .id = "mod")
+            .id = "mod") %>%
+    mutate(r_comp = r_comp,
+           r_diff = r2 - r_comp)
   
 }
 
@@ -239,61 +247,61 @@ res_sep <- sep_specs %>%
 toc()
 
 # Bootstraps for R2
-get_sep_boot <- function(spec_id, sep_var){
-  
-  spec <- get_spec(spec_id)
-  
-  df_mod <- get_df(spec_id) %>%
-    rename(sep_var = all_of(!!sep_var)) %>%
-    select(id, dep_var, prs, sep_var, female) %>%
-    drop_na()
-  
-  get_boot <- function(boot){
-    set.seed(boot)
-    
-    df_m <- sample_frac(df_mod, replace = TRUE)
-    
-    run_sep <- function(covars){
-      mod <- get_form(spec_id, covars) %>%
-        as.formula() %>%
-        lm(df_m)
-      
-      coefs <- coef(mod)
-      
-      c(coefs["sep_var"],
-        r2 = broom::glance(mod)[[1]]) %>%
-        enframe(name = "term", value = "estimate")
-    }
-    
-    res <- bind_rows(bivar = run_sep("sep_var"),
-                     adjust = run_sep(c("prs", "sep_var")),
-                     .id = "mod")
-    
-    r2_prs <- get_form(spec_id, "prs") %>%
-      as.formula() %>%
-      lm(df_m) %>%
-      broom::glance() %>%
-      pull(1)
-    
-    res %>%
-      uncount(ifelse(term == "r2", 2, 1), .id = "id") %>%
-      mutate(term = ifelse(id == 2, "r2_diff", term),
-             estimate = ifelse(id == 2, estimate - r2_prs, estimate))
-  }
-  
-  map_dfr(1:500, get_boot, .id = "boot") %>%
-    group_by(mod, term) %>%
-    summarise(get_ci(estimate),
-              .groups = "drop") %>%
-    mutate(n = nrow(df_mod))
-  
-}
-
-tic()
-res_sep_boot <- sep_specs %>%
-  filter(sep_var == "sep_ridit") %>%
-  get_furrr2(sep_var, get_sep_boot)
-toc()
+# get_sep_boot <- function(spec_id, sep_var){
+#   
+#   spec <- get_spec(spec_id)
+#   
+#   df_mod <- get_df(spec_id) %>%
+#     rename(sep_var = all_of(!!sep_var)) %>%
+#     select(id, dep_var, prs, sep_var, female) %>%
+#     drop_na()
+#   
+#   get_boot <- function(boot){
+#     set.seed(boot)
+#     
+#     df_m <- sample_frac(df_mod, replace = TRUE)
+#     
+#     run_sep <- function(covars){
+#       mod <- get_form(spec_id, covars) %>%
+#         as.formula() %>%
+#         lm(df_m)
+#       
+#       coefs <- coef(mod)
+#       
+#       c(coefs["sep_var"],
+#         r2 = broom::glance(mod)[[1]]) %>%
+#         enframe(name = "term", value = "estimate")
+#     }
+#     
+#     res <- bind_rows(bivar = run_sep("sep_var"),
+#                      adjust = run_sep(c("prs", "sep_var")),
+#                      .id = "mod")
+#     
+#     r2_prs <- get_form(spec_id, "prs") %>%
+#       as.formula() %>%
+#       lm(df_m) %>%
+#       broom::glance() %>%
+#       pull(1)
+#     
+#     res %>%
+#       uncount(ifelse(term == "r2", 2, 1), .id = "id") %>%
+#       mutate(term = ifelse(id == 2, "r2_diff", term),
+#              estimate = ifelse(id == 2, estimate - r2_prs, estimate))
+#   }
+#   
+#   map_dfr(1:500, get_boot, .id = "boot") %>%
+#     group_by(mod, term) %>%
+#     summarise(get_ci(estimate),
+#               .groups = "drop") %>%
+#     mutate(n = nrow(df_mod))
+#   
+# }
+# 
+# tic()
+# res_sep_boot <- sep_specs %>%
+#   filter(sep_var == "sep_ridit") %>%
+#   get_furrr2(sep_var, get_sep_boot)
+# toc()
 
 # 7. SEP Multiplicative ----
 get_mult <- function(spec_id, sep_var){
