@@ -203,9 +203,7 @@ sep_dict <- c(sep_ridit = "Father's Social Class (Ridit)",
 
 res_sep <- clean_res(res_sep) %>%
   mutate(mod_clean = factor(mod_dict[mod], mod_dict),
-         sep_clean = factor(sep_dict[sep_var], sep_dict)) %>%
-  mutate(across(c(beta, lci, uci),
-         ~ ifelse(str_detect(sep_var, "medu"), -.x, .x)))
+         sep_clean = factor(sep_dict[sep_var], sep_dict))
 
 res_sep %>%
   filter(sex == "all", dep_var == "bmi_raw") %>%
