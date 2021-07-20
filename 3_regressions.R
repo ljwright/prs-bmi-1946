@@ -244,62 +244,6 @@ res_sep <- sep_specs %>%
   get_furrr2(sep_var, get_sep)
 toc()
 
-# Bootstraps for R2
-# get_sep_boot <- function(spec_id, sep_var){
-#   
-#   spec <- get_spec(spec_id)
-#   
-#   df_mod <- get_df(spec_id) %>%
-#     rename(sep_var = all_of(!!sep_var)) %>%
-#     select(id, dep_var, prs, sep_var, female) %>%
-#     drop_na()
-#   
-#   get_boot <- function(boot){
-#     set.seed(boot)
-#     
-#     df_m <- sample_frac(df_mod, replace = TRUE)
-#     
-#     run_sep <- function(covars){
-#       mod <- get_form(spec_id, covars) %>%
-#         as.formula() %>%
-#         lm(df_m)
-#       
-#       coefs <- coef(mod)
-#       
-#       c(coefs["sep_var"],
-#         r2 = broom::glance(mod)[[1]]) %>%
-#         enframe(name = "term", value = "estimate")
-#     }
-#     
-#     res <- bind_rows(bivar = run_sep("sep_var"),
-#                      adjust = run_sep(c("prs", "sep_var")),
-#                      .id = "mod")
-#     
-#     r2_prs <- get_form(spec_id, "prs") %>%
-#       as.formula() %>%
-#       lm(df_m) %>%
-#       broom::glance() %>%
-#       pull(1)
-#     
-#     res %>%
-#       uncount(ifelse(term == "r2", 2, 1), .id = "id") %>%
-#       mutate(term = ifelse(id == 2, "r2_diff", term),
-#              estimate = ifelse(id == 2, estimate - r2_prs, estimate))
-#   }
-#   
-#   map_dfr(1:500, get_boot, .id = "boot") %>%
-#     group_by(mod, term) %>%
-#     summarise(get_ci(estimate),
-#               .groups = "drop") %>%
-#     mutate(n = nrow(df_mod))
-#   
-# }
-# 
-# tic()
-# res_sep_boot <- sep_specs %>%
-#   filter(sep_var == "sep_ridit") %>%
-#   get_furrr2(sep_var, get_sep_boot)
-# toc()
 
 # 7. SEP Multiplicative ----
 get_mult <- function(spec_id, sep_var){
@@ -339,31 +283,9 @@ tic()
 res_mult <- get_furrr2(sep_specs, sep_var, get_mult)
 toc()
 
-# 8. SEP Quantile Regression ----
-get_sep_quant <- function(spec_id, sep_var){
-  
-  df_mod <- get_df(spec_id) %>%
-    rename(sep_var = all_of(!!sep_var))
-  
-  mod_form <- get_form(spec_id, "prs*sep_var")
-  
-  as.formula(mod_form) %>%
-    rq(tau = 1:9/10, data = df_mod) %>%
-    broom::tidy(conf.int = TRUE) %>%
-    filter(term == "prs:sep_var") %>%
-    select(tau, beta = estimate, lci = conf.low, uci = conf.high)
-  
-}
 
-tic()
-res_sep_quant <- sep_specs %>%
-  filter(str_detect(dep_var, "(raw|std|ln)")) %>%
-  get_furrr2(sep_var, get_sep_quant)
-toc()
-
-
-# 10. Save Objects ----
+# 8. Save Objects ----
 save(res_prs, res_attrit, res_quant,
-     res_sep, res_mult, res_sep_quant,
+     res_sep, res_mult,
      mod_specs, get_ci,
      file = "Data/regression_results.Rdata")

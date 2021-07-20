@@ -63,9 +63,11 @@ df_long <- df_raw %>%
          ht_63 = ht_63*100,
          survey_weight = as.numeric(inf),
          female = sex - 1,
-         sep = as_factor(fsc50) %>% 
-           fct_recode(NULL = "Unknown") %>%
-           as.numeric() %>%
+         across(c(fsc50, fsc57),
+                ~ as_factor(.x) %>%
+                  fct_recode(NULL = "Unknown") %>%
+                  as.numeric()),
+         sep = ifelse(!is.na(fsc50), fsc50, fsc57) %>%
            sep_levels[.] %>%
            factor(levels = sep_levels),
          sep_ridit = make_ridit(sep),

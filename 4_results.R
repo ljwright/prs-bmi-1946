@@ -229,8 +229,8 @@ plot_sep <- function(dep_var, sex, save_p = FALSE){
   p <- res_sep %>%
     filter(dep_var == !!dep_var, sex == !!sex) %>%
     ggplot() +
-    aes(x = age_f, y = beta, ymin = lci, ymax = uci, 
-        color = mod_clean, fill = mod_clean, group = mod_clean) +
+    aes(x = age_f, y = beta, ymin = lci, ymax = uci, group = mod_clean, 
+        color = mod_clean, fill = mod_clean, linetype = mod_clean) +
     facet_grid(prs_clean ~ sep_clean, scales = "free", switch = "y") +
     geom_hline(yintercept = 0, linetype = "dashed") +
     geom_ribbon(color = NA, alpha = 0.2) +
@@ -242,7 +242,8 @@ plot_sep <- function(dep_var, sex, save_p = FALSE){
           strip.text.y.left = element_text(angle = 0),
           legend.position = "bottom",
           panel.spacing = unit(1, "lines")) +
-    labs(x = "Age", y = NULL, color = "Model", fill = "Model")
+    labs(x = "Age", y = NULL, color = "Model", 
+         fill = "Model", linetype = "Model")
   
   if (save_p){
     glue("Images/sep_{sex}_{dep_var}.png") %>%
@@ -274,23 +275,21 @@ res_mult <- res_mult %>%
 
 plot_mult <- function(dep_var, sex, save_p = FALSE){
   p <- res_mult %>%
-    filter(dep_var == !!dep_var, sex == !!sex) %>%
+    filter(dep_var == !!dep_var, sex == !!sex,
+           is.na(sep_values)) %>%
     ggplot() +
-    aes(x = age_f, y = beta, ymin = lci, ymax = uci,
-        color = sep_level, fill = sep_level, group = sep_level) +
+    aes(x = age_f, y = beta, ymin = lci, ymax = uci, group = sep_clean) +
     geom_hline(yintercept = 0, linetype = "dashed") +
     facet_grid(prs_clean ~ sep_clean, scales = "free_x", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
-    scale_color_brewer(palette = "Dark2") +
-    scale_fill_brewer(palette = "Dark2") +
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
           legend.position = "bottom",
           panel.spacing = unit(1, "lines")) +
-    labs(x = "Age", y = NULL, color = "Social Class",
-         fill = "Social Class")
+    labs(x = "Age", y = NULL, color = NULL,
+         fill = NULL)
   
   if (save_p){
     glue("Images/mult_{sex}_{dep_var}.png") %>%
