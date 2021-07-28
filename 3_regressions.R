@@ -24,7 +24,8 @@ df_reg <- df_long %>%
                      ln = log,
                      rank = ~ percent_rank(.x)*100))) %>%
   ungroup() %>%
-  rename(bmi_raw = bmi, bmi_corrected_raw = bmi_corrected)
+  rename(bmi_raw = bmi, bmi_corrected_raw = bmi_corrected) %>%
+  drop_na(matches("^prs"))
 
 rm(df_long)
 

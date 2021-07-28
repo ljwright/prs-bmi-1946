@@ -17,7 +17,7 @@ rm(list = ls())
 # 1. Load Data ----
 load("Data/df_long.Rdata")
 
-df_long <- df_long %>%
+df_desc <- df_long %>%
   drop_na(matches("prs"), bmi) %>%
   count(id) %>%
   full_join(df_long, by = "id") %>%
@@ -25,6 +25,8 @@ df_long <- df_long %>%
   select(-n)%>%
   mutate(age_f = ordered(age)) %>%
   arrange(id, age)
+
+rm(df_long)
 
 cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
                 "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
@@ -42,7 +44,7 @@ save(cbbPalette, gwas_dict, file = "Data/helpers.Rdata")
 
 # 2. Quintiles of PRS ----
 get_means <- function(prs_var, dep_var, age){
-  df_long %>%
+  df_desc %>%
     filter(age == !!age) %>%
     select(prs = all_of(prs_var), dep_var = all_of(dep_var)) %>%
     drop_na() %>%
@@ -53,9 +55,9 @@ get_means <- function(prs_var, dep_var, age){
     select(quintile, beta = 2, lci = 6, uci = 7)
 }
 
-df_quint <- expand_grid(prs_var = str_subset(names(df_long), "prs"),
-                        dep_var = str_subset(names(df_long), "^(bmi|height|weight|fat|lean)"),
-                        age = unique(df_long$age)) %>%
+df_quint <- expand_grid(prs_var = str_subset(names(df_desc), "prs"),
+                        dep_var = str_subset(names(df_desc), "^(bmi|height|weight|fat|lean)"),
+                        age = unique(df_desc$age)) %>%
   filter(!(dep_var %in% c("fat_ratio", "fat_mass", "lean_mass") & age != 63)) %>%
   mutate(res = pmap(list(prs_var, dep_var, age), get_means)) %>%
   unnest(res) %>%
@@ -79,30 +81,44 @@ df_quint %>%
 
 # 3. Kernel Density BMI ----
 plot_bmi <- function(df){
-  ggplot(df) +
+  df_kern <- df %>%
+    drop_na(matches("prs"), bmi)
+  
+  df_stat <- df_kern %>%
+    group_by(age_f) %>%
+    descr(bmi) %>%
+    tb() %>%
+    mutate(across(c(mean, sd, skewness), round, 1),
+           n = format(n.valid, big.mark = ",") %>% trimws(),
+           string = glue("N  = {n}\nMean = {mean}\nSD = {sd}\nSkew = {skewness}")) %>%
+    select(age_f, string)
+  
+  ggplot(df_kern) +
     aes(x = bmi) +
     facet_wrap(~ age_f, ncol = 4) +
-    geom_density(data = select(df_long, -age_f), aes(group = age),
+    geom_density(data = select(df_desc, -age_f), aes(group = age),
                  color = "grey70", fill = "grey70", alpha = 0.4) +
     geom_density(aes(color = age_f, fill = age_f), alpha = 0.7) +
+    geom_text(aes(x = Inf, y = Inf, label = string),
+              data = df_stat, hjust = 1.1, vjust = 1.1) +
     guides(color = FALSE, fill = FALSE) +
     theme_bw() +
     labs(x = "BMI", y = "Density")
 }
 
-plot_bmi(df_long)
+plot_bmi(df_desc)
 ggsave("Images/density_obs.png",
-       height = 18, width = 36, units = "cm")
+       height = 21, width = 29.7, units = "cm")
 
-df_long %>%
+df_desc %>%
   filter(sample == "cc") %>%
   plot_bmi() 
 ggsave("Images/density_cc.png",
-       height = 18, width = 36, units = "cm")
+       height = 21, width = 29.7, units = "cm")
 
 # 4. PRS, BMI, Height, Weight Correlations ----
 # PRS-BMI Scatter Plot
-df_scat <- df_long %>%
+df_scat <- df_desc %>%
   select(age, matches("prs"), bmi) %>%
   pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs_value") %>%
   drop_na() %>%
@@ -131,7 +147,7 @@ plot_scatter <- function(prs_var){
 rm(df_scat)
 
 # PRS and BMI/Height/Weight Correlations
-df_long %>%
+df_desc %>%
   select(id, matches("prs_"),
          age, bmi, height, weight) %>%
   drop_na(bmi) %>%
@@ -164,7 +180,7 @@ ggsave("Images/prs_corr.png",
        height = 16, width = 21, units = "cm")
 
 # BMI and Height/Weight Correlations
-df_long %>%
+df_desc %>%
   select(age, bmi, weight, height) %>%
   drop_na() %>%
   arrange(age) %>%
@@ -173,7 +189,7 @@ df_long %>%
             stretch(),
           .id = "age") %>%
   drop_na() %>%
-  mutate(age = unique(df_long$age)[as.numeric(age)] %>%
+  mutate(age = unique(df_desc$age)[as.numeric(age)] %>%
            as.factor(),
          phenotype = str_to_title(y)) %>%
   filter(x == "bmi") %>%
@@ -194,7 +210,7 @@ ggsave("Images/bmi_corr.png",
 
 # 5. Attrition ----
 # Distribution of BMI by PRS Missing/Observed
-df_attrit <- df_long %>%
+df_attrit <- df_desc %>%
   select(id, age, matches("prs"), bmi) %>%
   pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
   mutate(across(c(bmi, prs),
@@ -230,8 +246,6 @@ distinct(df_attrit, prs_var) %>%
   expand_grid(x_var = c("bmi", "prs")) %$%
   map2(x_var, prs_var, plot_attrit)
 
-rm(df_attrit)
-
 df_attrit %>%
   nest(data = -c(age, prs_var)) %>%
   mutate(map_dfr(data, 
@@ -254,8 +268,10 @@ df_attrit %>%
 ggsave("Images/attrit_means.png", 
        height = 16, width = 21, units = "cm")
 
+rm(df_attrit)
+
 # 6. PRS x Socio-Economic Position -----
-df_sep <- df_long %>%
+df_sep <- df_desc %>%
   distinct(id, sep, across(matches("prs"))) %>%
   pivot_longer(matches("prs"), names_to = "prs", values_to = "prs_value") %>%
   mutate(gwas_clean = factor(gwas_dict[prs], gwas_dict),
@@ -341,7 +357,7 @@ rm(sep_means)
 
 # 7. Probability of Superiority ----
 set.seed(1)
-df_long %>%
+df_desc %>%
   uncount(ifelse(sample == "cc", 2, 1), .id = "n") %>%
   mutate(sample = ifelse(n == 2, "obs", sample)) %>%
   select(matches("prs"), bmi, female, age, sample) %>%
@@ -384,7 +400,7 @@ ggsave("Images/prob_superiority.png",
 # 8. Descriptive Table ----
 load("Data/height_power.Rdata")
 
-flx <- df_long %>%
+flx <- df_desc %>%
   drop_na(matches("prs"), bmi) %>%
   select(age, bmi) %>%
   group_by(age) %>%

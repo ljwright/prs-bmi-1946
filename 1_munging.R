@@ -5,6 +5,7 @@ library(broom)
 library(gallimaufr)
 library(magrittr)
 library(ridittools)
+library(scales)
 
 rm(list = ls())
 
@@ -71,10 +72,12 @@ df_long <- df_raw %>%
            sep_levels[.] %>%
            factor(levels = sep_levels),
          sep_ridit = make_ridit(sep),
-         medu = case_when(between(magels, 10, 20) ~ (magels - 10) / 10,
-                          between(magels, 20, 23) ~ 1,
-                          TRUE ~ NA_real_),
-         medu = -medu,
+         # medu = case_when(between(magels, 10, 20) ~ (magels - 10) / 10,
+         #                  between(magels, 20, 23) ~ 1,
+         #                  TRUE ~ NA_real_),
+         # medu = -medu,
+         magels = ifelse(between(magels, 10, 23), magels, NA),
+         medu = -rescale(magels),
          medu_ridit = factor(medu) %>% make_ridit()
   ) %>%
   select(id, survey_weight, matches("^(prs|bmi|wt|ht)_"), 
@@ -126,7 +129,8 @@ save(height_power, file = "Data/height_power.Rdata")
 df_long <- df_long %>%
   left_join(height_power, by = "age") %>%
   mutate(bmi_corrected = weight / (height/100)^power) %>%
-  select(-power)
+  select(-power) %>%
+  filter(age != 6)
 
 save(df_long, file = "Data/df_long.Rdata")
 
@@ -147,3 +151,17 @@ height_corr %>%
   guides(color = FALSE)
 ggsave("Images/height_power.png",
        width = 21, height = 21, units = "cm")
+
+
+# Missing Social Class
+df_raw %>%
+  count(fsc50, fsc57) %>%
+  mutate(
+    across(c(fsc50, fsc57),
+         ~ as_factor(.x) %>%
+           fct_recode(NULL = "Unknown") %>%
+           as.numeric())
+  ) %>%
+  filter(is.na(fsc50)) %>%
+  drop_na(fsc57) %>%
+  count(wt = n)

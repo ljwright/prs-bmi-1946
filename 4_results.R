@@ -3,6 +3,9 @@ library(glue)
 library(magrittr)
 library(paletteer)
 library(patchwork)
+library(gallimaufr)
+library(flextable)
+library(officer)
 
 rm(list = ls())
 
@@ -31,6 +34,78 @@ clean_res <- function(df_res){
 res_prs <- clean_res(res_prs) %>%
   mutate(term_clean = ifelse(term == "prs", "Effect Size", "R-Squared"))
 
+# Results Table
+all_dict <- c(bmi_raw = "Absolute BMI", bmi_std = "Standardized BMI",
+              bmi_ln = "Log BMI", bmi_rank = "BMI Percentile",
+              bmi_corrected_raw = "Absolute BMI (Corrected)", 
+              bmi_corrected_std = "Standardized BMI (Corrected)",
+              bmi_corrected_ln = "Log BMI (Corrected)", 
+              bmi_corrected_rank = "BMI Percentile (Corrected)",
+              fat_ratio = "Fat Ratio", fat_mass = "Fat Mass",
+              lean_mass = "Lean Mass", weight = "Weight",
+              height = "Height")
+
+header_lbls <- list(dep_clean = "Outcome", age = "Age", 
+                    all_prs_k = "Khera et al. (2019)",
+                    all_prs_r = "Richardson et al. (2020)",
+                    all_prs_v = "Vogelezang et al. (2020)", 
+                    female_prs_k = "Khera et al. (2019)",
+                    female_prs_r = "Richardson et al. (2020)",
+                    female_prs_v = "Vogelezang et al. (2020)", 
+                    male_prs_k = "Khera et al. (2019)",
+                    male_prs_r = "Richardson et al. (2020)",
+                    male_prs_v = "Vogelezang et al. (2020)")
+
+span_lbls <- list(dep_clean = "", age = "", all_prs_k = "All",
+                  all_prs_r = "All", all_prs_v = "All", female_prs_k = "Female",
+                  female_prs_r = "Female", female_prs_v = "Female", 
+                  male_prs_k = "Male", male_prs_r = "Male",
+                  male_prs_v = "Male")
+
+get_flx <- function(term){
+  res_prs %>%
+    mutate(dep_clean = factor(all_dict[dep_var], all_dict),
+           across(beta:uci, round, 2),
+           string = glue("{beta} ({lci}, {uci})")) %>%
+    filter(term == !!term) %>%
+    arrange(dep_clean, age, sex, prs_var) %>%
+    select(dep_clean, age, sex, prs_var, string) %>%
+    pivot_wider(names_from = sex, values_from = string) %>%
+    pivot_wider(names_from = prs_var, values_from = all:male) %>%
+    make_flx(header_lbls, span_lbls) %>%
+    vline(j = c(2, 5, 8), part = "body",
+          border = fp_border(color="grey50", width = 1, style = "dashed"))
+}
+
+flx_prs <- get_flx("prs")
+save_as_docx(flx_prs, path = "Tables/results_table.docx")
+
+flx_r2 <- get_flx("r2")
+save_as_docx(flx_r2, path = "Tables/r2_table.docx")
+
+rm(flx_prs, flx_r2)
+
+
+# Small Tables
+make_tbl <- function(df_res, pivot_var){
+  df_res %>%
+    mutate(across(beta:uci, round, 2),
+           string = glue("{beta} ({lci}, {uci})")) %>%
+    select(age, var = all_of(!!pivot_var), string) %>%
+    arrange(age, var) %>%
+    pivot_wider(names_from = var, values_from = string)
+}
+
+res_prs %>%
+  filter(sex == "all", term == "prs", str_detect(dep_var, "(fat|lean)")) %>%
+  mutate(across(beta:uci, round, 2),
+         string = glue("b = {beta}; 95% CI = {lci}, {uci}")) %>%
+  select(dep_var, prs_var, string) %>%
+  arrange(dep_var, prs_var) %>%
+  pivot_wider(names_from = prs_var, values_from = string)
+
+
+# Mean and SD Plot
 plot_tbl <- df_long %>%
   select(age, matches("prs"), bmi, female) %>%
   pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
@@ -40,7 +115,7 @@ plot_tbl <- df_long %>%
             .groups = "drop") %>%
   pivot_longer(c(`Mean BMI`, `SD`), values_to = "beta", names_to = "stat") %>%
   mutate(age = factor(age) %>% fct_rev(),
-         beta = round(beta, 2)) %>%
+         beta = round(beta, 1)) %>%
   ggplot() +
   aes(x = age, label = beta, y = stat) +
   facet_grid(prs_var ~ stat, scales = "free") +
@@ -108,14 +183,17 @@ res_prs %>%
          sex == "all", term == "prs") %>%
   mutate(dep_clean = factor(alt_dict[dep_var], alt_dict)) %>%
   plot_main("~ prs_clean", 1, "off") +
+  facet_grid(~ prs_clean) +
   aes(x = dep_clean) +
   labs(x = NULL)
-ggsave("Images/prs_alternative.png", height = 21, width = 29.7, units = "cm")
+ggsave("Images/prs_alternative.png", 
+       height = 9.9, width = 16, units = "cm")
 
 # 3. Attrition Regressions ----
 res_attrit <- clean_res(res_attrit) %>%
   mutate(age_from = factor(age_from) %>%
-           fct_recode("Observed" = "0", "Complete Cases" = "2"))
+           fct_recode("Observed" = "0", "Complete Cases" = "2")) %>%
+  filter(age_from != "6")
 
 plot_attrit <- function(prs_var, dep_var, sex, save_p = FALSE){
   df_attrit <- res_attrit %>%
@@ -157,6 +235,13 @@ res_attrit %>%
 res_quant <- clean_res(res_quant) %>%
   mutate(tau_clean = glue("{tau*100}th") %>%
            fct_reorder(tau))
+
+flx_q <- res_quant %>%
+  filter(sex == "all", dep_var == "bmi_raw", prs_var == "prs_k") %>%
+  make_tbl("tau_clean") %>%
+  make_flx(list(age = "Age"))
+flx_q
+save_as_docx(flx_q, path = "Tables/quantile_results.docx")
 
 plot_quant <- function(dep_var, sex, prs_var, save_p = FALSE){
   df_res <- res_quant %>%
@@ -205,6 +290,38 @@ res_sep <- clean_res(res_sep) %>%
   mutate(mod_clean = factor(mod_dict[mod], mod_dict),
          sep_clean = factor(sep_dict[sep_var], sep_dict))
 
+
+# Table
+sep_tbl <- res_sep %>%
+  filter(sex == "all", dep_var == "bmi_raw", mod == "adjust") %>%
+  mutate(r_diff = glue("{round(100*r_diff, 2)}%")) %>%
+  select(age, sep_var, prs_var, r_diff) %>%
+  arrange(age, sep_var, prs_var) %>%
+  pivot_wider(names_from = sep_var, values_from = r_diff)  %>%
+  pivot_wider(names_from = prs_var, values_from = medu:sep_ridit)
+
+header_lbls <- case_when(names(sep_tbl) == "age" ~ "Age",
+                         str_detect(names(sep_tbl), "prs_k") ~ "Khera et al. (2019)",
+                         str_detect(names(sep_tbl), "prs_r") ~ "Richardson et al. (2020)",
+                         str_detect(names(sep_tbl), "prs_v") ~ "Vogelezang et al. (2020)") %>%
+  set_names(names(sep_tbl)) %>%
+  as.list()
+
+span_lbls <- case_when(names(sep_tbl) == "age" ~ "",
+                       str_detect(names(sep_tbl), "sep") ~ "Father's Occupational Class",
+                       str_detect(names(sep_tbl), "medu_ridit") ~ "Mother's Education (Ridit)",
+                       str_detect(names(sep_tbl), "medu") ~ "Mother's Education") %>%
+  set_names(names(sep_tbl)) %>%
+  as.list()
+
+flx_sep <- make_flx(sep_tbl, header_lbls, span_lbls) %>%
+  align(align="center", part = "all") %>%
+  vline(j = c(1, 4, 7), part = "body",
+        border = fp_border(color="grey50", width = 1, style = "dashed"))
+flx_sep
+save_as_docx(flx_sep, path = "Tables/sep_results.docx")
+
+# R2 Plot
 res_sep %>%
   filter(sex == "all", dep_var == "bmi_raw") %>%
   distinct(age_f, prs_clean, mod_clean, r_diff, sep_clean) %>%
@@ -225,6 +342,7 @@ res_sep %>%
   labs(x = "Age", y = NULL, color = "Model", shape = "Model")
 ggsave("Images/sep_r.png", height = 21, width = 29.7, units = "cm")
 
+# Main Plot
 plot_sep <- function(dep_var, sex, save_p = FALSE){
   p <- res_sep %>%
     filter(dep_var == !!dep_var, sex == !!sex) %>%
