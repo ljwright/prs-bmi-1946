@@ -12,8 +12,6 @@ library(flextable)
 
 rm(list = ls())
 
-# DECIDE KERNAL DENSITY AND SCATTER SAMPLE
-
 # 1. Load Data ----
 load("Data/df_long.Rdata")
 
@@ -79,7 +77,8 @@ df_quint %>%
         strip.text.y.left = element_text(angle = 0)) +
   labs(x = "Quintile", y = "Mean")
 
-# 3. Kernel Density BMI ----
+# 3. Kernel Density Plots ----
+# BMI
 plot_bmi <- function(df){
   df_kern <- df %>%
     drop_na(matches("prs"), bmi)
@@ -95,8 +94,8 @@ plot_bmi <- function(df){
   
   ggplot(df_kern) +
     aes(x = bmi) +
-    facet_wrap(~ age_f, ncol = 4) +
-    geom_density(data = select(df_desc, -age_f), aes(group = age),
+    facet_wrap(~ age_f, ncol = 3) +
+    geom_density(data = select(df_kern, -age_f), aes(group = age),
                  color = "grey70", fill = "grey70", alpha = 0.4) +
     geom_density(aes(color = age_f, fill = age_f), alpha = 0.7) +
     geom_text(aes(x = Inf, y = Inf, label = string),
@@ -108,13 +107,52 @@ plot_bmi <- function(df){
 
 plot_bmi(df_desc)
 ggsave("Images/density_obs.png",
-       height = 21, width = 29.7, units = "cm")
+       height = 21, width = 21, units = "cm")
 
 df_desc %>%
   filter(sample == "cc") %>%
   plot_bmi() 
 ggsave("Images/density_cc.png",
-       height = 21, width = 29.7, units = "cm")
+       height = 21, width = 21, units = "cm")
+
+
+# PRS
+plot_prs <- function(prs_var){
+  df_kern <- df_desc %>%
+    drop_na(matches("prs"), bmi) %>%
+    select(id, age_f, age, matches("prs"), bmi) %>%
+    pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
+    filter(prs_var == !!prs_var)
+  
+  df_stat <- df_kern %>%
+    group_by(age_f, prs_var) %>%
+    descr(prs) %>%
+    tb() %>%
+    mutate(across(c(mean, sd, skewness), round, 1),
+           n = format(n.valid, big.mark = ",") %>% trimws(),
+           string = glue("N  = {n}\nMean = {mean}\nSD = {sd}\nSkew = {skewness}")) %>%
+    select(prs_var, age_f, string)
+  
+  p <- ggplot(df_kern) +
+    aes(x = prs) +
+    facet_wrap(~ age_f, ncol = 3) +
+    geom_density(data = select(df_kern, -age_f), aes(group = age),
+                 color = "grey70", fill = "grey70", alpha = 0.4) +
+    geom_density(aes(color = age_f, fill = age_f), alpha = 0.7) +
+    geom_text(aes(x = Inf, y = Inf, label = string),
+              data = df_stat, hjust = 1.1, vjust = 1.1) +
+    guides(color = FALSE, fill = FALSE) +
+    theme_bw() +
+    labs(x = "Polygenic Score", y = "Density")
+  
+  glue("Images/density_{prs_var}.png") %>%
+    ggsave(plot = p, height = 21, width = 21, units = "cm")
+  
+  return(p)
+}
+
+names(gwas_dict) %>% map(plot_prs)
+
 
 # 4. PRS, BMI, Height, Weight Correlations ----
 # PRS-BMI Scatter Plot
@@ -269,6 +307,66 @@ ggsave("Images/attrit_means.png",
        height = 16, width = 21, units = "cm")
 
 rm(df_attrit)
+
+# Difference in odds PRS observed by BMI
+attrit_glm <- df_desc %>%
+  group_by(age) %>%
+  mutate(bmi_std = wtd_scale(bmi),
+         miss_prs = ifelse(is.na(prs_k) | is.na(prs_v) | is.na(prs_r), 0, 1)) %>%
+  select(id, age, miss_prs, bmi_std) %>%
+  ungroup() %>%
+  drop_na() %>%
+  nest(data = -age) %>%
+  mutate(map_dfr(data,
+                 ~ glm(miss_prs ~ bmi_std, binomial, .x) %>%
+                   tidy(conf.int = TRUE, exponentiate = TRUE) %>%
+                   filter(term == "bmi_std") %>%
+                   select(beta = estimate, lci = 6, uci = 7))) %>%
+  select(-data) %>%
+  mutate(age = factor(age),
+         age_f = fct_rev(age))
+
+ggplot(attrit_glm) +
+  aes(x = age_f, y = beta, ymin = lci, ymax = uci) +
+  geom_hline(yintercept = 1) +
+  geom_pointrange() +
+  scale_y_log10() +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Age", y = "Odds Ratio (Observed vs Missing PRS Score)")
+ggsave("Images/bmi_by_prs_observed.png", 
+       height = 16, width = 21, units = "cm")
+
+
+# Difference in BMI by PRS Observed
+attrit_lm <- df_desc %>%
+  group_by(age) %>%
+  mutate(bmi_std = wtd_scale(bmi),
+         miss_prs = ifelse(is.na(prs_k) | is.na(prs_v) | is.na(prs_r), 1, 0)) %>%
+  select(id, age, miss_prs, bmi_std) %>%
+  ungroup() %>%
+  drop_na() %>%
+  nest(data = -age) %>%
+  mutate(map_dfr(data,
+                 ~ lm(bmi_std ~ miss_prs, .x) %>%
+                   tidy(conf.int = TRUE) %>%
+                   filter(term == "miss_prs") %>%
+                   select(beta = estimate, lci = 6, uci = 7))) %>%
+  select(-data) %>%
+  mutate(age = factor(age),
+         age_f = fct_rev(age))
+
+ggplot(attrit_lm) +
+  aes(x = age_f, y = beta, ymin = lci, ymax = uci) +
+  geom_hline(yintercept = 0) +
+  geom_pointrange() +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Age", y = "Difference in BMI (Missing vs Observed PRS Score)")
+ggsave("Images/bmi_by_prs_missing.png", 
+       height = 16, width = 21, units = "cm")
+
+
 
 # 6. PRS x Socio-Economic Position -----
 df_sep <- df_desc %>%

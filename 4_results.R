@@ -278,6 +278,37 @@ res_quant %>%
   filter(sex == "all", dep_var == "bmi_raw") %$%
   pwalk(list(dep_var, sex, prs_var), plot_quant, TRUE)
 
+# Heat Maps
+plot_heat <- function(dep_var, sex, prs_var, save_p = FALSE){
+  df_res <- res_quant %>%
+    filter(sex == !!sex, dep_var == !!dep_var, prs_var == !!prs_var)
+  
+  p <- ggplot(df_res) +
+    aes(x = tau_clean, y = age_f, color = beta, fill = beta) +
+    geom_tile() +
+    scale_fill_viridis_c(limits = c(0,2)) +
+    scale_color_viridis_c(limits = c(0, 2)) +
+    theme_minimal() +
+    labs(x = "Quantile", y = "Age", 
+         color = "Estimate", fill = "Estimate") +
+    theme(legend.position = "top") +
+    guides(fill = guide_colorbar(title.position = 'top', 
+                                 title.hjust = .5,                                
+                                 barwidth = unit(20, 'lines'), 
+                                 barheight = unit(.5, 'lines')))
+  
+  if (save_p){
+    glue("Images/heat_{sex}_{dep_var}_{prs_var}.png") %>%
+      ggsave(p, height = 9.9, width = 16, units = "cm")
+  }
+  
+  return(p)
+}
+res_quant %>%
+  distinct(dep_var, sex, prs_var) %>%
+  filter(sex == "all", dep_var == "bmi_raw") %$%
+  pwalk(list(dep_var, sex, prs_var), plot_heat, TRUE)
+
 
 # 5. SEP Additive ----
 mod_dict <- c(bivar = "Bivariate", adjust = "+ Polygenic Risk Score")
@@ -288,7 +319,8 @@ sep_dict <- c(sep_ridit = "Father's Social Class (Ridit)",
 
 res_sep <- clean_res(res_sep) %>%
   mutate(mod_clean = factor(mod_dict[mod], mod_dict),
-         sep_clean = factor(sep_dict[sep_var], sep_dict))
+         sep_clean = factor(sep_dict[sep_var], sep_dict)) %>%
+  filter(sep_var != "medu")
 
 
 # Table
@@ -388,7 +420,7 @@ res_mult <- res_mult %>%
                                TRUE ~ NA_character_) %>%
            factor(c("Lowest SEP", "Highest SEP", "Interaction Term")),
          sep_clean = factor(sep_dict[sep_var], sep_dict)) %>%
-  filter(!is.na(sep_level)) %>%
+  filter(!is.na(sep_level), sep_var != "medu") %>%
   clean_res()
 
 plot_mult <- function(dep_var, sex, save_p = FALSE){
@@ -422,3 +454,43 @@ res_mult %>%
   filter(sex == "all",
          dep_var %in% c("bmi_raw", "bmi_std")) %$%
   walk2(dep_var, sex, plot_mult, TRUE)
+
+
+# Additive and Multiplicative
+plot_sep_both <- function(sep_var){
+  bind_rows("Main Effects" = res_sep, 
+            "Interaction Term" = filter(res_mult, name == "mod"),
+            .id = "facet") %>%
+    filter(sex == "all", prs_var == "prs_k",
+           dep_var == "bmi_raw", sep_var == !!sep_var) %>%
+    mutate(facet = fct_rev(facet)) %>%
+    ggplot() +
+    aes(x = age_f, y = beta, ymin = lci, ymax = uci,
+        group = mod_clean, color = mod_clean, fill = mod_clean) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    facet_grid(facet ~ ., scales = "free", switch = "y") +
+    geom_ribbon(color = NA, alpha = 0.2) +
+    geom_line() +
+    scale_color_manual(values = cbbPalette[6:7],
+                       breaks = levels(res_sep$mod_clean)) +
+    scale_fill_manual(values = cbbPalette[6:7],
+                      breaks = levels(res_sep$mod_clean)) +
+    theme_minimal() +
+    theme(strip.placement = "outside",
+          strip.text.y.left = element_text(angle = 0),
+          legend.position = c(0.15, 0.85),
+          panel.spacing = unit(1, "lines")) +
+    labs(x = "Age", y = NULL, 
+         color = "Model", fill = "Model")
+}
+
+plot_sep_both("sep_ridit")
+ggsave("Images/both_sep_ridit.png", 
+       height = 16, width = 21, units = "cm")
+
+plot_sep_both("medu_ridit")
+ggsave("Images/both_medu_ridit.png", 
+       height = 16, width = 21, units = "cm")  
+
+
+# 7. Rename Files ----
