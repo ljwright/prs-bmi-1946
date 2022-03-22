@@ -47,20 +47,25 @@ all_dict <- c(bmi_raw = "Absolute BMI", bmi_std = "Standardized BMI",
 
 header_lbls <- list(dep_clean = "Outcome", age = "Age", 
                     all_prs_k = "Khera et al. (2019)",
+                    all_prs_ksig = "Khera et al. (2019)*",
                     all_prs_r = "Richardson et al. (2020)",
                     all_prs_v = "Vogelezang et al. (2020)", 
                     female_prs_k = "Khera et al. (2019)",
+                    female_prs_ksig = "Khera et al. (2019)*",
                     female_prs_r = "Richardson et al. (2020)",
                     female_prs_v = "Vogelezang et al. (2020)", 
                     male_prs_k = "Khera et al. (2019)",
+                    male_prs_ksig = "Khera et al. (2019)*",
                     male_prs_r = "Richardson et al. (2020)",
                     male_prs_v = "Vogelezang et al. (2020)")
 
-span_lbls <- list(dep_clean = "", age = "", all_prs_k = "All",
-                  all_prs_r = "All", all_prs_v = "All", female_prs_k = "Female",
+span_lbls <- list(dep_clean = "", age = "", 
+                  all_prs_k = "All", all_prs_ksig = "All",
+                  all_prs_r = "All", all_prs_v = "All", 
+                  female_prs_k = "Female", female_prs_ksig = "Female",
                   female_prs_r = "Female", female_prs_v = "Female", 
-                  male_prs_k = "Male", male_prs_r = "Male",
-                  male_prs_v = "Male")
+                  male_prs_k = "Male", male_prs_ksig = "Male",
+                  male_prs_r = "Male", male_prs_v = "Male")
 
 get_flx <- function(term){
   res_prs %>%
@@ -73,14 +78,16 @@ get_flx <- function(term){
     pivot_wider(names_from = sex, values_from = string) %>%
     pivot_wider(names_from = prs_var, values_from = all:male) %>%
     make_flx(header_lbls, span_lbls) %>%
-    vline(j = c(2, 5, 8), part = "body",
+    vline(j = c(2, 6, 10), part = "body",
           border = fp_border(color="grey50", width = 1, style = "dashed"))
 }
 
 flx_prs <- get_flx("prs")
+flx_prs
 save_as_docx(flx_prs, path = "Tables/results_table.docx")
 
 flx_r2 <- get_flx("r2")
+flx_r2
 save_as_docx(flx_r2, path = "Tables/r2_table.docx")
 
 rm(flx_prs, flx_r2)
@@ -106,28 +113,32 @@ res_prs %>%
 
 
 # Mean and SD Plot
-plot_tbl <- df_long %>%
-  select(age, matches("prs"), bmi, female) %>%
-  pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
-  drop_na() %>%
-  group_by(age, prs_var) %>%
-  summarise(`Mean BMI` = mean(bmi), SD = sd(bmi),
-            .groups = "drop") %>%
-  pivot_longer(c(`Mean BMI`, `SD`), values_to = "beta", names_to = "stat") %>%
-  mutate(age = factor(age) %>% fct_rev(),
-         beta = round(beta, 1)) %>%
-  ggplot() +
-  aes(x = age, label = beta, y = stat) +
-  facet_grid(prs_var ~ stat, scales = "free") +
-  geom_text(size = 3) +
-  coord_flip() +
-  labs(x = NULL, y = NULL) +
-  theme_minimal() +
-  theme(axis.text = element_blank(),
-        strip.text.y = element_blank(),
-        panel.grid = element_blank(),
-        strip.placement = "outside",
-        panel.spacing = unit(1, "lines"))
+plot_tbl <- function(prs_vars){
+  df_long %>%
+    select(age, matches("prs"), bmi, female) %>%
+    pivot_longer(matches("prs"), names_to = "prs_var", values_to = "prs") %>%
+    drop_na() %>%
+    filter(prs_var %in% prs_vars) %>%
+    group_by(age, prs_var) %>%
+    summarise(`Mean BMI` = mean(bmi), SD = sd(bmi),
+              .groups = "drop") %>%
+    pivot_longer(c(`Mean BMI`, `SD`), values_to = "beta", names_to = "stat") %>%
+    mutate(age = factor(age) %>% fct_rev(),
+           beta = round(beta, 1)) %>%
+    ggplot() +
+    aes(x = age, label = beta, y = stat) +
+    facet_grid(prs_var ~ stat, scales = "free") +
+    geom_text(size = 3) +
+    coord_flip() +
+    labs(x = NULL, y = NULL) +
+    theme_minimal() +
+    theme(axis.text = element_blank(),
+          strip.text.y = element_blank(),
+          panel.grid = element_blank(),
+          strip.placement = "outside",
+          panel.spacing = unit(1, "lines"))
+}
+
 
 # Plots
 plot_main <- function(df, facet_form, colors, legend_pos){
@@ -147,19 +158,27 @@ plot_main <- function(df, facet_form, colors, legend_pos){
     labs(x = NULL, y = NULL, color = NULL, shape = NULL)
 }
 
-# Main Results
+# Main Results (Khera and Vogelezang)
+p <- res_prs %>%
+  filter(dep_var == "bmi_raw", sex == "all",
+         prs_var %in% c("prs_k", "prs_v")) %>%
+  plot_main("prs_clean ~ term_clean", 1, "off")
+p + plot_tbl(c("prs_k", "prs_v")) + patchwork::plot_layout(widths = c(4, 1.1))
+ggsave("Images/prs_main.png", height = 16, width = 21, units = "cm")
+
+# Full
 p <- res_prs %>%
   filter(dep_var == "bmi_raw", sex == "all") %>%
   plot_main("prs_clean ~ term_clean", 1, "off")
-p + plot_tbl + patchwork::plot_layout(widths = c(4, 1.1))
-ggsave("Images/prs_main.png", height = 21, width = 21, units = "cm")
+p + plot_tbl(names(gwas_dict)) + patchwork::plot_layout(widths = c(4, 1.1))
+ggsave("Images/prs_all.png", height = 29.7, width = 21, units = "cm")
 rm(p, plot_tbl)
 
 # Main Results by Sex
 res_prs %>%
   filter(dep_var == "bmi_raw", sex != "all") %>%
   plot_main("prs_clean ~ term_clean", 6:7, "bottom")
-ggsave("Images/prs_sex.png", height = 21, width = 21, units = "cm")
+ggsave("Images/prs_sex.png", height = 29.7, width = 21, units = "cm")
 
 # Main Results x Definition of BMI
 res_prs %>%
@@ -229,6 +248,40 @@ res_attrit %>%
   filter(sex == "all",
          dep_var %in% c("bmi_raw", "bmi_std")) %$%
   pwalk(list(prs_var, dep_var, sex), plot_attrit, TRUE)
+
+
+# Attrition R2
+plot_attrit_r2 <- function(prs_var, save_p = FALSE){
+  df_attrit <- clean_res(res_attrit_r2) %>%
+    filter(!(age_from %in% c(6, 69))) %>%
+    mutate(age_from = factor(age_from) %>%
+             fct_recode("Observed" = "0", "Complete Cases" = "2")) %>%
+    filter(prs_var == !!prs_var)
+  
+  p <- ggplot(df_attrit) +
+    aes(x = age_f, y = beta, ymin = lci, ymax = uci) +
+    facet_wrap(~ age_from) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_ribbon(aes(group = age_from), alpha = 0.2,
+                fill = cbbPalette[6]) +
+    geom_line(data = rename(df_attrit, age_samp = age_from),
+              aes(group = age_samp), color = "grey70") +
+    geom_line(aes(group = age_from), 
+              color = cbbPalette[6])  +
+    theme_bw() +
+    theme(panel.spacing = unit(1, "lines")) +
+    labs(x = "Age", y = bquote("Incremental R"^2))
+  
+  if (save_p){
+    glue("Images/attrit_r2_{prs_var}.png") %>%
+      ggsave(p, height = 21, width = 29.7, units = "cm")
+  }
+  
+  return(p)
+}
+
+unique(res_attrit_r2$prs_var) %>%
+  walk(plot_attrit_r2, TRUE)
 
 
 # 4. Quantile Regressions ----
@@ -313,52 +366,59 @@ res_quant %>%
 # 5. SEP Additive ----
 mod_dict <- c(bivar = "Bivariate", adjust = "+ Polygenic Risk Score")
 
-sep_dict <- c(sep_ridit = "Father's Social Class (Ridit)",
-              medu = "Mother's Education",
-              medu_ridit = "Mother's Education (Ridit)")
+sep_dict <- c(
+  all = "Multiple Adjusted",
+  father_class = "Father's Social Class",
+  father_class_ridit = "Father's Social Class (Ridit)",
+  father_edu_level = "Father's Education Level",
+  father_edu_level_ridit = "Father's Education Level (Ridit)",
+  father_edu_years = "Father's Education Years",
+  father_edu_years_ridit = "Father's Education Years (Ridit)",
+  mother_edu_level = "Mother's Education Level",
+  mother_edu_level_ridit = "Mother's Education Level (Ridit)",
+  mother_edu_years = "Mother's Education Years",
+  mother_edu_years_ridit = "Mother's Education Years (Ridit)",
+  own_class = "Social Class @ Age 53",
+  own_class_ridit = "Social Class @ Age 53 (Ridit)",
+  own_edu_level = "Own Education Level",
+  own_edu_level_ridit = "Own Education Level (Ridit)"
+)
 
 res_sep <- clean_res(res_sep) %>%
-  mutate(mod_clean = factor(mod_dict[mod], mod_dict),
-         sep_clean = factor(sep_dict[sep_var], sep_dict)) %>%
-  filter(sep_var != "medu")
-
+  mutate(sep_var = map_chr(sep_var,
+                           ~ ifelse(length(.x) == 1, .x, "all")),
+         mod_clean = factor(mod_dict[mod], mod_dict),
+         sep_clean = factor(sep_dict[sep_var], sep_dict))
 
 # Table
 sep_tbl <- res_sep %>%
   filter(sex == "all", dep_var == "bmi_raw", mod == "adjust") %>%
-  mutate(r_diff = glue("{round(100*r_diff, 2)}%")) %>%
-  select(age, sep_var, prs_var, r_diff) %>%
-  arrange(age, sep_var, prs_var) %>%
-  pivot_wider(names_from = sep_var, values_from = r_diff)  %>%
-  pivot_wider(names_from = prs_var, values_from = medu:sep_ridit)
+  distinct(prs_var, age, sep_var, r_prs_diff) %>%
+  mutate(r_diff = glue("{round(100*r_prs_diff, 2)}%")) %>%
+  select(prs_var, age, sep_var, r_diff) %>%
+  arrange(prs_var, age, age, sep_var) %>%
+  pivot_wider(names_from = sep_var, values_from = r_diff) %>%
+  mutate(prs_var = gwas_dict[prs_var])
 
-header_lbls <- case_when(names(sep_tbl) == "age" ~ "Age",
-                         str_detect(names(sep_tbl), "prs_k") ~ "Khera et al. (2019)",
-                         str_detect(names(sep_tbl), "prs_r") ~ "Richardson et al. (2020)",
-                         str_detect(names(sep_tbl), "prs_v") ~ "Vogelezang et al. (2020)") %>%
-  set_names(names(sep_tbl)) %>%
+header_lbls <- tibble(var = names(sep_tbl),
+                      name = case_when(var == "prs_var" ~ "Polygenic Score",
+                                       var == "age" ~ "Age",
+                                       TRUE ~ sep_dict[var])) %>%
+  deframe() %>%
   as.list()
 
-span_lbls <- case_when(names(sep_tbl) == "age" ~ "",
-                       str_detect(names(sep_tbl), "sep") ~ "Father's Occupational Class",
-                       str_detect(names(sep_tbl), "medu_ridit") ~ "Mother's Education (Ridit)",
-                       str_detect(names(sep_tbl), "medu") ~ "Mother's Education") %>%
-  set_names(names(sep_tbl)) %>%
-  as.list()
-
-flx_sep <- make_flx(sep_tbl, header_lbls, span_lbls) %>%
-  align(align="center", part = "all") %>%
-  vline(j = c(1, 4, 7), part = "body",
-        border = fp_border(color="grey50", width = 1, style = "dashed"))
+flx_sep <- make_flx(sep_tbl, header_lbls) %>%
+  align(align = "center", part = "all")
 flx_sep
 save_as_docx(flx_sep, path = "Tables/sep_results.docx")
 
 # R2 Plot
 res_sep %>%
   filter(sex == "all", dep_var == "bmi_raw") %>%
-  distinct(age_f, prs_clean, mod_clean, r_diff, sep_clean) %>%
+  filter(sep_var %in% c("father_class_ridit", "mother_edu_years", "mother_edu_years_ridit")) %>%
+  distinct(age_f, prs_clean, mod_clean, r_prs_diff, sep_clean) %>%
   ggplot() +
-  aes(x = age_f, y = r_diff, color = mod_clean, 
+  aes(x = age_f, y = r_prs_diff, color = mod_clean, 
       group = mod_clean, shape = mod_clean) +
   facet_grid(prs_clean ~ sep_clean, scales = "free", switch = "y") +
   geom_hline(yintercept = 0, linetype = "dashed") +
@@ -374,20 +434,41 @@ res_sep %>%
   labs(x = "Age", y = NULL, color = "Model", shape = "Model")
 ggsave("Images/sep_r.png", height = 21, width = 29.7, units = "cm")
 
+res_sep %>%
+  filter(sex == "all", dep_var == "bmi_raw", 
+         prs_var == "prs_k", mod == "adjust") %>%
+  filter(!str_detect(sep_var, "(edu_years|class_ridit|level_ridit)$")) %>%
+  distinct(age_f, prs_clean, mod_clean, r_prs_diff, sep_clean) %>%
+  ggplot() +
+  aes(x = age_f, y = r_prs_diff, group = mod_clean) +
+  facet_wrap(~ sep_clean, ncol = 4) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(labels = scales::percent) +
+  theme_bw() +
+  theme(legend.position = "bottom",
+        panel.spacing = unit(1, "lines")) +
+  labs(x = "Age", y = NULL)
+ggsave("Images/sep_additive_r2.png", 
+       height = 21, width = 29.7, units = "cm")
+
 # Main Plot
 plot_sep <- function(dep_var, sex, save_p = FALSE){
   p <- res_sep %>%
-    filter(dep_var == !!dep_var, sex == !!sex) %>%
+    filter(dep_var == !!dep_var, sex == !!sex, 
+           prs_var == "prs_k",
+           str_detect(sep_var, "ridit")) %>%
     ggplot() +
     aes(x = age_f, y = beta, ymin = lci, ymax = uci, group = mod_clean, 
         color = mod_clean, fill = mod_clean, linetype = mod_clean) +
-    facet_grid(prs_clean ~ sep_clean, scales = "free", switch = "y") +
+    facet_wrap(~ sep_clean, labeller = label_wrap_gen(25), nrow = 2) +
     geom_hline(yintercept = 0, linetype = "dashed") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
     scale_color_manual(values = cbbPalette[6:7]) +
     scale_fill_manual(values = cbbPalette[6:7]) +
-    theme_minimal() +
+    theme_bw() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
           legend.position = "bottom",
@@ -397,7 +478,7 @@ plot_sep <- function(dep_var, sex, save_p = FALSE){
   
   if (save_p){
     glue("Images/sep_{sex}_{dep_var}.png") %>%
-      ggsave(p, height = 16, width = 21, units = "cm")
+      ggsave(p, height = 21, width = 29.7, units = "cm")
   }
   
   return(p)
@@ -420,17 +501,19 @@ res_mult <- res_mult %>%
                                TRUE ~ NA_character_) %>%
            factor(c("Lowest SEP", "Highest SEP", "Interaction Term")),
          sep_clean = factor(sep_dict[sep_var], sep_dict)) %>%
-  filter(!is.na(sep_level), sep_var != "medu") %>%
+  filter(!is.na(sep_level)) %>%
   clean_res()
 
 plot_mult <- function(dep_var, sex, save_p = FALSE){
   p <- res_mult %>%
     filter(dep_var == !!dep_var, sex == !!sex,
            is.na(sep_values)) %>%
+    filter(!str_detect(sep_var, "edu_years")) %>%
     ggplot() +
     aes(x = age_f, y = beta, ymin = lci, ymax = uci, group = sep_clean) +
+    facet_grid(sep_clean ~ prs_clean, scales = "free_x", switch = "y",
+               labeller = label_wrap_gen(16)) +
     geom_hline(yintercept = 0, linetype = "dashed") +
-    facet_grid(prs_clean ~ sep_clean, scales = "free_x", switch = "y") +
     geom_ribbon(color = NA, alpha = 0.2) +
     geom_line() +
     theme_minimal() +
@@ -457,12 +540,12 @@ res_mult %>%
 
 
 # Additive and Multiplicative
-plot_sep_both <- function(sep_var){
+plot_both <- function(sep_vars, legend.position){
   bind_rows("Main Effects" = res_sep, 
             "Interaction Term" = filter(res_mult, name == "mod"),
             .id = "facet") %>%
     filter(sex == "all", prs_var == "prs_k",
-           dep_var == "bmi_raw", sep_var == !!sep_var) %>%
+           dep_var == "bmi_raw", sep_var %in% !!sep_vars) %>%
     mutate(facet = fct_rev(facet)) %>%
     ggplot() +
     aes(x = age_f, y = beta, ymin = lci, ymax = uci,
@@ -478,19 +561,22 @@ plot_sep_both <- function(sep_var){
     theme_minimal() +
     theme(strip.placement = "outside",
           strip.text.y.left = element_text(angle = 0),
-          legend.position = c(0.15, 0.85),
+          legend.position = legend.position,
           panel.spacing = unit(1, "lines")) +
     labs(x = "Age", y = NULL, 
          color = "Model", fill = "Model")
 }
 
-plot_sep_both("sep_ridit")
-ggsave("Images/both_sep_ridit.png", 
+plot_both("father_class_ridit", c(0.15, 0.85))
+ggsave("Images/both_father_class_ridit.png", 
        height = 16, width = 21, units = "cm")
 
-plot_sep_both("medu_ridit")
-ggsave("Images/both_medu_ridit.png", 
-       height = 16, width = 21, units = "cm")  
+names(sep_dict) %>%
+  str_subset("ridit") %>%
+  str_subset("father_class_ridit", TRUE) %>%
+  plot_both("bottom") +
+  facet_grid(facet ~ sep_clean, scales = "free", switch = "y",
+             labeller = label_wrap_gen(20))
+ggsave("Images/both_all_ridit.png", 
+       height = 21, width = 29.7, units = "cm")
 
-
-# 7. Rename Files ----

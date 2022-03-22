@@ -30,6 +30,7 @@ cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
                 "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 
 gwas_dict <- c(prs_k = "Khera et al. (2019)", 
+               prs_ksig = "Khera et al. (2019)*",
                prs_r = "Richardson et al. (2020)", 
                prs_v = "Vogelezang et al. (2020)")
 
@@ -100,7 +101,7 @@ plot_bmi <- function(df){
     geom_density(aes(color = age_f, fill = age_f), alpha = 0.7) +
     geom_text(aes(x = Inf, y = Inf, label = string),
               data = df_stat, hjust = 1.1, vjust = 1.1) +
-    guides(color = FALSE, fill = FALSE) +
+    guides(color = "none", fill = "none") +
     theme_bw() +
     labs(x = "BMI", y = "Density")
 }
@@ -141,7 +142,7 @@ plot_prs <- function(prs_var){
     geom_density(aes(color = age_f, fill = age_f), alpha = 0.7) +
     geom_text(aes(x = Inf, y = Inf, label = string),
               data = df_stat, hjust = 1.1, vjust = 1.1) +
-    guides(color = FALSE, fill = FALSE) +
+    guides(color = "none", fill = "none") +
     theme_bw() +
     labs(x = "Polygenic Score", y = "Density")
   
@@ -215,7 +216,7 @@ df_desc %>%
   labs(x = "Age", y = "Correlation", 
        color = NULL, shape = NULL)
 ggsave("Images/prs_corr.png",
-       height = 16, width = 21, units = "cm")
+       height = 21, width = 21, units = "cm")
 
 # BMI and Height/Weight Correlations
 df_desc %>%
@@ -245,6 +246,12 @@ df_desc %>%
        color = NULL, shape = NULL)
 ggsave("Images/bmi_corr.png",
        height = 9.9, width = 21, units = "cm")
+
+df_desc %>%
+  distinct(id, across(matches("prs_"))) %>%
+  drop_na() %>%
+  select(-id) %>%
+  correlate()
 
 # 5. Attrition ----
 # Distribution of BMI by PRS Missing/Observed
@@ -304,7 +311,7 @@ df_attrit %>%
   coord_flip() +
   labs(x = "Age", y = "Difference in PRS (Observed vs Missing BMI)")
 ggsave("Images/attrit_means.png", 
-       height = 16, width = 21, units = "cm")
+       height = 21, width = 29.7, units = "cm")
 
 rm(df_attrit)
 
@@ -312,7 +319,7 @@ rm(df_attrit)
 attrit_glm <- df_desc %>%
   group_by(age) %>%
   mutate(bmi_std = wtd_scale(bmi),
-         miss_prs = ifelse(is.na(prs_k) | is.na(prs_v) | is.na(prs_r), 0, 1)) %>%
+         miss_prs = ifelse(is.na(prs_k) | is.na(prs_v) | is.na(prs_r) | is.na(prs_ksig), 0, 1)) %>%
   select(id, age, miss_prs, bmi_std) %>%
   ungroup() %>%
   drop_na() %>%
@@ -342,7 +349,7 @@ ggsave("Images/bmi_by_prs_observed.png",
 attrit_lm <- df_desc %>%
   group_by(age) %>%
   mutate(bmi_std = wtd_scale(bmi),
-         miss_prs = ifelse(is.na(prs_k) | is.na(prs_v) | is.na(prs_r), 1, 0)) %>%
+         miss_prs = ifelse(is.na(prs_k) | is.na(prs_v) | is.na(prs_r) | is.na(prs_ksig), 1, 0)) %>%
   select(id, age, miss_prs, bmi_std) %>%
   ungroup() %>%
   drop_na() %>%
@@ -370,7 +377,7 @@ ggsave("Images/bmi_by_prs_missing.png",
 
 # 6. PRS x Socio-Economic Position -----
 df_sep <- df_desc %>%
-  distinct(id, sep, across(matches("prs"))) %>%
+  distinct(id, sep = father_class, across(matches("prs"))) %>%
   pivot_longer(matches("prs"), names_to = "prs", values_to = "prs_value") %>%
   mutate(gwas_clean = factor(gwas_dict[prs], gwas_dict),
          sep_f = sep) %>%
@@ -403,7 +410,7 @@ ggplot(df_sep) +
   scale_color_brewer(palette = "Set1") +
   scale_fill_brewer(palette = "Set1") +
   labs(x = "Polygenic Risk Score", y = NULL) +
-  guides(color = FALSE, fill = FALSE)
+  guides(color = "none", fill = "none")
 ggsave("Images/prs_density_sep.png",
        height = 21, width = 29.7, units = "cm")
 
@@ -419,13 +426,18 @@ df_sep %>%
            ordered(levels(df_sep$sep)) %>%
            fct_rev()) %>%
   ggplot() +
-  aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high) +
-  facet_wrap(~ gwas_clean) +
+  aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high,
+      color = gwas_clean, shape = gwas_clean) +
+  # facet_wrap(~ gwas_clean) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey70") +
-  geom_pointrange() +
+  geom_pointrange(position = position_dodge(0.5)) +
+  scale_shape_manual(values = 15:19) +
+  scale_color_brewer(palette = "Dark2") +
   theme_bw() +
+  theme(legend.position = "bottom") +
   coord_flip() +
-  labs(x = NULL, y = "Average Polygenic Risk Score")
+  labs(x = NULL, y = "Mean Polygenic Risk Score (+95% CI)",
+       color = NULL, shape = NULL)
 ggsave("Images/mean_prs_sep.png",
        height = 16, width = 21, units = "cm")
 
@@ -485,13 +497,14 @@ df_desc %>%
   geom_hline(yintercept = 0.5, linetype = "dashed") +
   geom_line() +
   geom_point() +
-  scale_color_manual(values = cbbPalette[c(4, 6:7)]) +
+  scale_shape_manual(values = 15:19) +
+  scale_color_brewer(palette = "Dark2") +
   scale_y_continuous(labels = scales::percent) +
   theme_minimal() +
   theme(legend.position = "bottom") +
   labs(x = "Age", y = "Probability of Superiority",
-       color = "Polygenic Risk Score",
-       shape = "Polygenic Risk Score")
+       color = NULL,
+       shape = NULL)
 ggsave("Images/prob_superiority.png",
        height = 9.9, width = 21, units = "cm")
 
