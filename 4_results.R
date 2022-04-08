@@ -46,26 +46,26 @@ all_dict <- c(bmi_raw = "Absolute BMI", bmi_std = "Standardized BMI",
               height = "Height")
 
 header_lbls <- list(dep_clean = "Outcome", age = "Age", 
-                    all_prs_k = "Khera et al. (2019)",
-                    all_prs_ksig = "Khera et al. (2019)*",
-                    all_prs_r = "Richardson et al. (2020)",
-                    all_prs_v = "Vogelezang et al. (2020)", 
-                    female_prs_k = "Khera et al. (2019)",
-                    female_prs_ksig = "Khera et al. (2019)*",
-                    female_prs_r = "Richardson et al. (2020)",
-                    female_prs_v = "Vogelezang et al. (2020)", 
-                    male_prs_k = "Khera et al. (2019)",
-                    male_prs_ksig = "Khera et al. (2019)*",
-                    male_prs_r = "Richardson et al. (2020)",
-                    male_prs_v = "Vogelezang et al. (2020)")
+                    all_prs_k = "Khera et al. (2019) Adult", 
+                    all_prs_r_adult = "Richardson et al. (2020) Adult",
+                    all_prs_v = "Vogelezang et al. (2020) Child",
+                    all_prs_r_child = "Richardson et al. (2020) Child",
+                    female_prs_k = "Khera et al. (2019) Adult",
+                    female_prs_r_adult = "Richardson et al. (2020) Adult",
+                    female_prs_v = "Vogelezang et al. (2020) Child", 
+                    female_prs_r_child = "Richardson et al. (2020) Child",
+                    male_prs_k = "Khera et al. (2019) Adult",
+                    male_prs_r_adult = "Richardson et al. (2020) Adult",
+                    male_prs_v = "Vogelezang et al. (2020) Child",
+                    male_prs_r_child = "Richardson et al. (2020) Child")
 
 span_lbls <- list(dep_clean = "", age = "", 
-                  all_prs_k = "All", all_prs_ksig = "All",
-                  all_prs_r = "All", all_prs_v = "All", 
-                  female_prs_k = "Female", female_prs_ksig = "Female",
-                  female_prs_r = "Female", female_prs_v = "Female", 
-                  male_prs_k = "Male", male_prs_ksig = "Male",
-                  male_prs_r = "Male", male_prs_v = "Male")
+                  all_prs_k = "All", all_prs_v = "All",
+                  all_prs_r_adult = "All", all_prs_r_child = "All",
+                  female_prs_k = "Female", female_prs_v = "Female",
+                  female_prs_r_adult = "Female", female_prs_r_child = "Female", 
+                  male_prs_k = "Male", male_prs_v = "Male",
+                  male_prs_r_adult = "Male", male_prs_r_child = "Male")
 
 get_flx <- function(term){
   res_prs %>%
@@ -75,6 +75,8 @@ get_flx <- function(term){
     filter(term == !!term) %>%
     arrange(dep_clean, age, sex, prs_var) %>%
     select(dep_clean, age, sex, prs_var, string) %>%
+    mutate(prs_var = factor(prs_var, names(gwas_dict))) %>%
+    arrange(prs_var) %>%
     pivot_wider(names_from = sex, values_from = string) %>%
     pivot_wider(names_from = prs_var, values_from = all:male) %>%
     make_flx(header_lbls, span_lbls) %>%
@@ -145,7 +147,8 @@ plot_main <- function(df, facet_form, colors, legend_pos){
   ggplot(df) +
     aes(x = age_rev, y = beta, ymin = lci, ymax = uci, 
         color = sex_clean, shape = sex_clean) +
-    facet_grid(facet_form, scales = "free_x", switch = "y") +
+    facet_grid(facet_form, scales = "free_x", switch = "y",
+               labeller = label_wrap_gen()) +
     coord_flip() +
     geom_hline(yintercept = 0, linetype = "dashed") +
     geom_pointrange(position = position_dodge(0.5)) +
@@ -161,10 +164,18 @@ plot_main <- function(df, facet_form, colors, legend_pos){
 # Main Results (Khera and Vogelezang)
 p <- res_prs %>%
   filter(dep_var == "bmi_raw", sex == "all",
-         prs_var %in% c("prs_k", "prs_v")) %>%
+         prs_var %in% c("prs_k")) %>%
+  plot_main(". ~ term_clean", 1, "off")
+p + plot_tbl(c("prs_k")) + patchwork::plot_layout(widths = c(4, 1.1))
+ggsave("Images/prs_main.png", height = 9.9, width = 21, units = "cm")
+
+# Main Results (Khera and Vogelezang)
+p <- res_prs %>%
+  filter(dep_var == "bmi_raw", sex == "all",
+         prs_var %in% c("prs_k", "prs_v", "prs_r_adult")) %>%
   plot_main("prs_clean ~ term_clean", 1, "off")
-p + plot_tbl(c("prs_k", "prs_v")) + patchwork::plot_layout(widths = c(4, 1.1))
-ggsave("Images/prs_main.png", height = 16, width = 21, units = "cm")
+p + plot_tbl(c("prs_k", "prs_v", "prs_r_adult")) + patchwork::plot_layout(widths = c(4, 1.1))
+ggsave("Images/prs_3.png", height = 16, width = 21, units = "cm")
 
 # Full
 p <- res_prs %>%
@@ -202,7 +213,7 @@ res_prs %>%
          sex == "all", term == "prs") %>%
   mutate(dep_clean = factor(alt_dict[dep_var], alt_dict)) %>%
   plot_main("~ prs_clean", 1, "off") +
-  facet_grid(~ prs_clean) +
+  facet_grid(~ prs_clean, labeller = label_wrap_gen()) +
   aes(x = dep_clean) +
   labs(x = NULL)
 ggsave("Images/prs_alternative.png", 
@@ -394,7 +405,8 @@ res_sep <- clean_res(res_sep) %>%
 sep_tbl <- res_sep %>%
   filter(sex == "all", dep_var == "bmi_raw", mod == "adjust") %>%
   distinct(prs_var, age, sep_var, r_prs_diff) %>%
-  mutate(r_diff = glue("{round(100*r_prs_diff, 2)}%")) %>%
+  mutate(r_diff = glue("{round(100*r_prs_diff, 2)}%"),
+         prs_var = factor(prs_var, names(gwas_dict))) %>%
   select(prs_var, age, sep_var, r_diff) %>%
   arrange(prs_var, age, age, sep_var) %>%
   pivot_wider(names_from = sep_var, values_from = r_diff) %>%
@@ -420,7 +432,8 @@ res_sep %>%
   ggplot() +
   aes(x = age_f, y = r_prs_diff, color = mod_clean, 
       group = mod_clean, shape = mod_clean) +
-  facet_grid(prs_clean ~ sep_clean, scales = "free", switch = "y") +
+  facet_grid(prs_clean ~ sep_clean, scales = "free", switch = "y", 
+             labeller = label_wrap_gen(25)) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   geom_line() +
   geom_point() +
@@ -578,5 +591,5 @@ names(sep_dict) %>%
   facet_grid(facet ~ sep_clean, scales = "free", switch = "y",
              labeller = label_wrap_gen(20))
 ggsave("Images/both_all_ridit.png", 
-       height = 21, width = 29.7, units = "cm")
+       height = 21, width = 35, units = "cm")
 

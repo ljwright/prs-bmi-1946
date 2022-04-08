@@ -91,10 +91,10 @@ truncate <- function(x, a, b) pmin(pmax(x, a), b)
 # Clean
 df_long <- df_raw %>%
   # Polygenic Scores
-  rename(prs_ksig  = adultbmi_prs_richardson2020,
+  rename(prs_r_adult  = adultbmi_prs_richardson2020,
          prs_k = bmi_prs_khera,
          prs_v = childbmi_prs_vogelezang2020, 
-         prs_r = childbmi_prs_richardson2020) %>%
+         prs_r_child = childbmi_prs_richardson2020) %>%
   mutate(across(matches("prs"), wtd_scale)) %>%
   # Anthropometrics
   rename_with(~ str_replace(.x, "n", ""), matches("^(h|w)tn")) %>%
@@ -214,7 +214,8 @@ df_long <- df_long %>%
   mutate(bmi_corrected = weight / (height/100)^power) %>%
   select(-power) %>%
   filter(age != 6) %>%
-  arrange(id, age)
+  arrange(id, age) %>%
+  relocate(id, age, survey_weight, prs_k, prs_v, prs_r_adult, prs_r_child)
 
 save(df_long, file = "Data/df_long.Rdata")
 

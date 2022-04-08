@@ -29,10 +29,10 @@ rm(df_long)
 cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
                 "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 
-gwas_dict <- c(prs_k = "Khera et al. (2019)", 
-               prs_ksig = "Khera et al. (2019)*",
-               prs_r = "Richardson et al. (2020)", 
-               prs_v = "Vogelezang et al. (2020)")
+gwas_dict <- c(prs_k = "Khera et al. (2019) Adult",  
+               prs_r_adult = "Richardson et al. (2020) Adult",
+               prs_v = "Vogelezang et al. (2020) Child",
+               prs_r_child = "Richardson et al. (2020) Child")
 
 dep_dict <- c(bmi = "BMI", bmi_corrected = "Corrected BMI",
               fat_ratio  = "Fat Ratio", fat_mass  = "Fat Mass", lean_mass = "Lean Mass",
@@ -291,19 +291,23 @@ distinct(df_attrit, prs_var) %>%
   expand_grid(x_var = c("bmi", "prs")) %$%
   map2(x_var, prs_var, plot_attrit)
 
-df_attrit %>%
+df_desc %>%
+  select(id, age, matches("prs"), bmi) %>%
+  mutate(obs_bmi = ifelse(is.na(bmi), 0, 1)) %>%
+  pivot_longer(matches("prs"), values_to = "prs", names_to = "prs_var") %>%
   nest(data = -c(age, prs_var)) %>%
-  mutate(map_dfr(data, 
-                 ~ glm(miss_bmi ~ prs, binomial, .x) %>%
-                   tidy(conf.int = TRUE) %>%
-                   filter(term == "prs") %>%
-                   select(beta = 2, lci = 6, uci = 7))) %>%
+  mutate(res = map(data, 
+                   ~ lm(prs ~ obs_bmi, .x) %>%
+                     tidy(conf.int = TRUE) %>%
+                     filter(term == "obs_bmi") %>%
+                     select(beta = estimate, lci = conf.low, uci = conf.high))) %>%
+  unnest(res) %>%
   select(-data) %>%
   mutate(age = factor(age) %>% fct_rev(),
          prs_clean = factor(gwas_dict[prs_var], gwas_dict)) %>%
   ggplot() +
   aes(x = age, y = beta, ymin = lci, ymax = uci) +
-  facet_wrap(~ prs_clean, nrow = 1) +
+  facet_wrap(~ prs_clean, nrow = 1, labeller = label_wrap_gen()) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   geom_pointrange() +
   theme_bw() +
@@ -316,16 +320,22 @@ ggsave("Images/attrit_means.png",
 rm(df_attrit)
 
 # Difference in odds PRS observed by BMI
+observed_prs <- df_desc %>% 
+  select(id, matches("prs")) %>% 
+  distinct() %>%
+  drop_na() %>%
+  pull(id)
+
 attrit_glm <- df_desc %>%
   group_by(age) %>%
   mutate(bmi_std = wtd_scale(bmi),
-         miss_prs = ifelse(is.na(prs_k) | is.na(prs_v) | is.na(prs_r) | is.na(prs_ksig), 0, 1)) %>%
-  select(id, age, miss_prs, bmi_std) %>%
+         obs_prs = ifelse(id %in% observed_prs, 1, 0)) %>%
+  select(id, age, obs_prs, bmi_std) %>%
   ungroup() %>%
   drop_na() %>%
   nest(data = -age) %>%
   mutate(map_dfr(data,
-                 ~ glm(miss_prs ~ bmi_std, binomial, .x) %>%
+                 ~ glm(obs_prs ~ bmi_std, binomial, .x) %>%
                    tidy(conf.int = TRUE, exponentiate = TRUE) %>%
                    filter(term == "bmi_std") %>%
                    select(beta = estimate, lci = 6, uci = 7))) %>%
@@ -349,7 +359,7 @@ ggsave("Images/bmi_by_prs_observed.png",
 attrit_lm <- df_desc %>%
   group_by(age) %>%
   mutate(bmi_std = wtd_scale(bmi),
-         miss_prs = ifelse(is.na(prs_k) | is.na(prs_v) | is.na(prs_r) | is.na(prs_ksig), 1, 0)) %>%
+         miss_prs = ifelse(id %in% observed_prs, 0, 1)) %>%
   select(id, age, miss_prs, bmi_std) %>%
   ungroup() %>%
   drop_na() %>%
@@ -437,7 +447,9 @@ df_sep %>%
   theme(legend.position = "bottom") +
   coord_flip() +
   labs(x = NULL, y = "Mean Polygenic Risk Score (+95% CI)",
-       color = NULL, shape = NULL)
+       color = NULL, shape = NULL) +
+  guides(color = guide_legend(nrow = 2, byrow=TRUE),
+         shape = guide_legend(nrow = 2, byrow=TRUE))
 ggsave("Images/mean_prs_sep.png",
        height = 16, width = 21, units = "cm")
 
@@ -536,3 +548,12 @@ flx <- df_desc %>%
   autofit()
 flx
 save_as_docx(flx, path = "Tables/descriptives.docx")
+
+
+# 9. PRS Correlations ----
+df_desc %>%
+  select(id, matches("prs")) %>%
+  distinct() %>%
+  select(-id) %>%
+  correlate() %>%
+  shave(upper = TRUE)

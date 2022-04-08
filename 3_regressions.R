@@ -345,7 +345,7 @@ get_mult <- function(spec_id, sep_var){
   df_mod <- get_df(spec_id) %>%
     rename(sep_var = all_of(!!sep_var))
   
-  mod <- get_form(spec_id, "prs*sep_var") %>%
+  mod <- get_form(spec_id, c("prs*sep_var", pcs)) %>%
     as.formula() %>%
     lm(df_mod)
   
